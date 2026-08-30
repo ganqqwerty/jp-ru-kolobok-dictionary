@@ -68,6 +68,28 @@ README-YU-3 — Jitendex, JMdict, Tatoeba, creator names, and license text inten
 
 README-YU-4 — Version v1.0.1 uses the stable installed title `Колобок 400k` and the owned update index `https://ganqqwerty.github.io/jp-ru-kolobok-dictionary/yomitan.json`. After the one-time manual import from v1.0, future update checks stay inside the Kolobok release channel.
 
+## README-YTP — Plain-text Yomitan export
+
+README-YTP-1 — `export-yomitan-plain` converts a finished rich Yomitan archive into a
+second archive for readers with incomplete structured-content support. It keeps term,
+reading, tag, score, sequence, and redirect data. It changes only the glossary display.
+
+```sh
+translationctl export-yomitan-plain \
+  dist/jp-ru-kolobok-400k-v1.0.1-yomitan.zip \
+  --output dist/jp-ru-kolobok-400k-v1.0.1-yomitan-plain.zip
+translationctl verify-yomitan-plain \
+  dist/jp-ru-kolobok-400k-v1.0.1-yomitan-plain.zip \
+  --source dist/jp-ru-kolobok-400k-v1.0.1-yomitan.zip
+```
+
+README-YTP-2 — The plain archive has a separate installed title and revision. It has no
+update URL, because the published update channel points to the rich archive.
+
+README-YTP-3 — Ruby becomes bracketed readings. Lists keep visible markers. Tables use
+text columns and short form markers. External links show their URLs. Images become text
+placeholders, and the archive does not include CSS or media files.
+
 ## README-GD — GoldenDict export
 
 README-GD-1 — `export-goldendict --run-id ID --output dist/jp-ru-kolobok-400k-v1.0-goldendict.zip`

@@ -41,6 +41,7 @@ from .yomitan_audit import (
     write_yomitan_visible_latin_approval,
 )
 from .yomitan_remediation import write_yomitan_update_index
+from .yomitan_plain import convert_yomitan_to_plain, verify_plain_yomitan
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -186,6 +187,12 @@ def _parser() -> argparse.ArgumentParser:
     latin_approval = commands.add_parser("approve-yomitan-visible-latin")
     latin_approval.add_argument("path", type=Path)
     latin_approval.add_argument("--output", type=Path, required=True)
+    plain_export = commands.add_parser("export-yomitan-plain")
+    plain_export.add_argument("path", type=Path)
+    plain_export.add_argument("--output", type=Path, required=True)
+    plain_verify = commands.add_parser("verify-yomitan-plain")
+    plain_verify.add_argument("path", type=Path)
+    plain_verify.add_argument("--source", type=Path)
     return parser
 
 
@@ -350,6 +357,23 @@ def execute(args: argparse.Namespace) -> Any:
             "classification_counts": approval["classification_counts"],
             "review_records_sha256": approval["review_records_sha256"],
         }
+    if args.command == "export-yomitan-plain":
+        result = convert_yomitan_to_plain(args.path.resolve(), args.output.resolve())
+        result.update(verify_plain_yomitan(args.output.resolve(), source=args.path.resolve()))
+        config = Config.load(args.config)
+        result.update(validate_archive(
+            args.output.resolve(), config.work_dir / "schemas" / "pinned-yomitan",
+        ))
+        return result
+    if args.command == "verify-yomitan-plain":
+        result = verify_plain_yomitan(
+            args.path.resolve(), source=args.source.resolve() if args.source else None,
+        )
+        config = Config.load(args.config)
+        result.update(validate_archive(
+            args.path.resolve(), config.work_dir / "schemas" / "pinned-yomitan",
+        ))
+        return result
     config = Config.load(args.config)
     database = Database(config)
     if args.command == "init-db":
