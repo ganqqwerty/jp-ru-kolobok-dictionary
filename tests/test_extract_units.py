@@ -1,4 +1,4 @@
-from jitendex_ru.extract_units import protected_tokens
+from jitendex_ru.extract_units import extract_article_units, protected_tokens
 
 
 def test_scalar_protected_tokens_are_available_to_the_model_and_validator():
@@ -23,3 +23,25 @@ def test_common_xref_phrases_are_not_mistaken_for_taxa():
         "xref_gloss",
         "③ government office related to finances (Kamakura and Muromachi periods)",
     ) == ()
+
+
+def test_japanese_monolingual_yomitan_units_are_extracted_for_translation():
+    row = [
+        "ぴくり", "ぴくり", "", "", 0,
+        [{"type": "structured-content", "content": [
+            {"data": {"content": "glossaryShortDefinition"}, "content": [
+                {"tag": "li", "content": "体が一度だけ小さく動くさま。"},
+            ]},
+            {"data": {"content": "examples"}, "content": [
+                {"tag": "li", "content": "眉がぴくりと動く。"},
+            ]},
+        ]}], 1, "",
+    ]
+
+    units = extract_article_units(row, "lexicographer-v2")
+
+    assert [(unit.role, unit.source_text) for unit in units] == [
+        ("glossary", "体が一度だけ小さく動くさま。"),
+        ("example", "眉がぴくりと動く。"),
+    ]
+    assert all(unit.protected_tokens == () for unit in units)

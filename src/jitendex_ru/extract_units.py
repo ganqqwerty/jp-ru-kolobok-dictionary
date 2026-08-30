@@ -21,6 +21,9 @@ ROLE_BY_SELECTOR = {
     "misc-info": "register", "field-info": "label", "dialect-info": "register",
     "sense-note": "note", "info-gloss": "note", "xref": "xref_gloss", "antonym": "xref_gloss",
     "forms": "label", "lang-source": "note",
+    # Common selectors used by compact Japanese monolingual Yomitan sources.
+    "glossaryShortDefinition": "glossary", "glossaryExtendedDefinition": "note",
+    "examples": "example",
 }
 EXCLUDED_SELECTORS = {
     "example-sentence-a", "attribution", "attribution-footnote", "redirect", "ruby", "rt",
@@ -32,6 +35,7 @@ NON_TRANSLATABLE_KEYS = {
 }
 PROTECTED_RE = re.compile(r"https?://\S+|\b(?:JMdict|Tatoeba)\b|[\u3040-\u30ff\u3400-\u9fff]+|\{[^{}]+\}|\b\d+(?:\.\d+)*\b")
 SOURCE_ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9.+/-]{1,11}\b")
+TRANSLATABLE_TEXT_RE = re.compile(r"[A-Za-z\u3040-\u30ff\u3400-\u9fff]")
 
 
 @dataclass(frozen=True)
@@ -44,7 +48,14 @@ class ExtractedUnit:
 
 def protected_tokens(role: str, text: str) -> tuple[str, ...]:
     visible_text = " ".join(glossary_evidence(text)) if role == "glossary_set" else text
+    # Japanese is source content in a JP->RU unit, not text that the Russian
+    # target must repeat. A URL or short Latin label must not switch the whole
+    # Japanese sentence back to the older Jitendex protection behavior.
+    japanese_count = len(re.findall(r"[\u3040-\u30ff\u3400-\u9fff]", visible_text))
+    latin_count = len(re.findall(r"[A-Za-z]", visible_text))
     tokens = list(PROTECTED_RE.findall(visible_text))
+    if japanese_count > latin_count:
+        tokens = []
     tokens.extend(SOURCE_ACRONYM_RE.findall(visible_text))
     tokens.extend(KEY_CHORD_RE.findall(visible_text))
     if role == "xref_gloss":
@@ -97,7 +108,7 @@ def _walk(node: Any, pointer: str = "", selectors: tuple[str, ...] = ()) -> Iter
                 continue
             if key in {"content", "title"} and isinstance(value, str):
                 text = value.strip()
-                if role and text and re.search(r"[A-Za-z]", text):
+                if role and text and TRANSLATABLE_TEXT_RE.search(text):
                     unit_role = "tooltip" if key == "title" else role
                     yield ExtractedUnit(child_pointer, unit_role, text, protected_tokens(unit_role, text))
             else:
@@ -108,7 +119,7 @@ def _walk(node: Any, pointer: str = "", selectors: tuple[str, ...] = ()) -> Iter
     elif isinstance(node, str):
         role = next((ROLE_BY_SELECTOR[item] for item in reversed(selectors) if item in ROLE_BY_SELECTOR), None)
         text = node.strip()
-        if role and text and re.search(r"[A-Za-z]", text):
+        if role and text and TRANSLATABLE_TEXT_RE.search(text):
             yield ExtractedUnit(pointer, role, text, protected_tokens(role, text))
 
 
@@ -136,7 +147,7 @@ def _walk_lexicographer(node: Any, pointer: str = "", selectors: tuple[str, ...]
                 continue
             if key in {"content", "title"} and isinstance(value, str):
                 text = value.strip()
-                if role and text and re.search(r"[A-Za-z]", text):
+                if role and text and TRANSLATABLE_TEXT_RE.search(text):
                     unit_role = "tooltip" if key == "title" else role
                     yield ExtractedUnit(child_pointer, unit_role, text, protected_tokens(unit_role, text))
             else:
@@ -147,7 +158,7 @@ def _walk_lexicographer(node: Any, pointer: str = "", selectors: tuple[str, ...]
     elif isinstance(node, str):
         role = next((ROLE_BY_SELECTOR[item] for item in reversed(selectors) if item in ROLE_BY_SELECTOR), None)
         text = node.strip()
-        if role and text and re.search(r"[A-Za-z]", text):
+        if role and text and TRANSLATABLE_TEXT_RE.search(text):
             yield ExtractedUnit(pointer, role, text, protected_tokens(role, text))
 
 

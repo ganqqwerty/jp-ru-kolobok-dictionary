@@ -2438,3 +2438,17 @@ HIST-YOMITAN-V101-9 — The clean-profile smoke passed in Chrome `151.0.7922.169
 HIST-YOMITAN-V101-10 — Release `https://github.com/ganqqwerty/jp-ru-kolobok-dictionary/releases/tag/v1.0.1` is public. Tag `v1.0.1` resolves to verified release commit `e8696066bd629ecd265783e5b5a3de43b933330b`, which is an ancestor of published `main`. GitHub Pages workflow `32482676304` succeeded, and the public page exposes all five versioned downloads plus the manual-upgrade warning.
 
 HIST-YOMITAN-V101-11 — The post-publication audit fetched all seven release assets into a clean directory. Every archive matched `jp-ru-kolobok-400k-v1.0.1-SHA256SUMS.txt`; all five format verifiers passed on the registered byte-identical artifacts. The public update index is byte-identical to the staged index with SHA-256 `90017a061ee25d82c1f4fd312175d02c57a792ac1cdea295d21b3ee02e7638c7` and has no operational Jitendex URL. The final suite collected 174 tests: 172 passed and two expected PostgreSQL integration tests skipped.
+
+## HIST-SURASURA-R1 — Surasura Japanese-to-Russian run 1
+
+HIST-SURASURA-R1-1 — Run 1 translated `[JA-JA Onomatopoeia] surasura.zip` in the isolated PostgreSQL database `surasura_translation`. The source SHA-256 is `f8d882b8db922e9638d4d577885c0e939266a15d285c0807c5117ee59d13f56e`. The source contains 1,422 entries. One entry has an empty definition, so 1,421 entries produced 5,369 Japanese translation units.
+
+HIST-SURASURA-R1-2 — The run used `gpt-5.6-luna`, medium reasoning, `prompts/translate_luna_ja_ru_v1.txt`, and concurrency 100. Luna finished in 376.10 seconds. It made 245 attempts, including six validation retries, one timeout, and one recursive split. There were zero rate limits, zero transport failures, and zero database failures. Total usage was 5,278,083 tokens.
+
+HIST-SURASURA-R1-3 — The first JP-source rule protected Japanese tokens when a definition also contained short Latin text. This caused early validation retries. The extractor now treats a Japanese-dominant unit as translatable source text and does not require its Japanese or Latin fragments in the Russian target. The saved responses remained in the audit trail, and normal retry and split provenance produced the accepted replacements.
+
+HIST-SURASURA-R1-4 — Acceptance stored 5,369 translations. Validation reported zero membership mismatches and zero blocking issues. `release_ready` remains false only because this Luna workflow has no optional Terra review rows, which matches the established Luna release behavior.
+
+HIST-SURASURA-R1-5 — The verified archive is `dist/jp-ru-surasura-onomatopoeia-v1.0-yomitan.zip`, SHA-256 `7c19d03d91cf5a0bd44ba8e748a1fea390f088d704fd547385476122755c3015`. It contains all 1,422 source entries and one schema-valid term bank. A second export was byte-identical. The full test suite passed with two expected PostgreSQL integration skips.
+
+HIST-SURASURA-R1-6 — The PostgreSQL backup is `work/surasura/backups/surasura-translation-run1.dump`, SHA-256 `2861fcade2a899ea30d118a3d8030a073af6e13dbf2e83fb1c6a8926adae6103`. The archive keeps the source author, attribution, and project URL. Its title is `surasura 擬声語 — русский` and its revision is `surasura-ru-2026.08.30`.

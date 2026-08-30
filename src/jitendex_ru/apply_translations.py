@@ -23,13 +23,17 @@ def _set_language_for_leaf(source: Any, pointer: str) -> None:
     segments = pointer.removeprefix("/").split("/")
     if not segments:
         return
-    parent_pointer = "/" + "/".join(segments[:-1]) if len(segments) > 1 else ""
-    try:
-        parent = json_pointer_get(source, parent_pointer)
-    except (KeyError, IndexError, TypeError, ValueError):
+    if segments[-1] not in {"content", "title"}:
         return
-    if isinstance(parent, dict) and parent.get("lang") == "en" and segments[-1] in {"content", "title"}:
-        parent["lang"] = "ru"
+    for depth in range(len(segments) - 1, -1, -1):
+        parent_pointer = "/" + "/".join(segments[:depth]) if depth else ""
+        try:
+            parent = json_pointer_get(source, parent_pointer)
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+        if isinstance(parent, dict) and parent.get("lang") in {"en", "ja"}:
+            parent["lang"] = "ru"
+            return
 
 
 def _compose_glossary(source_items: Any, serialized_target: str, pointer: str) -> Any:
@@ -135,11 +139,13 @@ def apply_article(
         original = json.loads(row["source_text"]) if row["role"] == "glossary_set" else current_source
         json_pointer_set(comparison, row["json_pointer"], original)
         segments = row["json_pointer"].removeprefix("/").split("/")
-        parent_pointer = "/" + "/".join(segments[:-1]) if len(segments) > 1 else ""
-        parent = json_pointer_get(comparison, parent_pointer)
-        source_parent = json_pointer_get(source, parent_pointer)
-        if isinstance(parent, dict) and isinstance(source_parent, dict) and "lang" in source_parent:
-            parent["lang"] = source_parent["lang"]
+        for depth in range(len(segments) - 1, -1, -1):
+            parent_pointer = "/" + "/".join(segments[:depth]) if depth else ""
+            parent = json_pointer_get(comparison, parent_pointer)
+            source_parent = json_pointer_get(source, parent_pointer)
+            if isinstance(parent, dict) and isinstance(source_parent, dict) and "lang" in source_parent:
+                parent["lang"] = source_parent["lang"]
+                break
     if structural_fingerprint(comparison, pointers) != expected_fingerprint:
         raise ValueError(f"article {article['id']} unapproved structure changed")
     return output
