@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .db import audit
+from .dojg import DOJG_ROLE, extract_dojg_segments, translation_pointer_base
 from .prep_metrics import PrepMetrics
 from .util import (
     KEY_CHORD_RE, LANGUAGE_ORIGIN_RE, canonical_json, json_pointer_escape,
@@ -165,8 +166,38 @@ def _walk_lexicographer(node: Any, pointer: str = "", selectors: tuple[str, ...]
 def extract_article_units(row: list[Any], pipeline_version: str = "scalar-v1") -> list[ExtractedUnit]:
     if len(row) < 6:
         return []
+    if pipeline_version == "kanjidic-v1":
+        meanings = row[4]
+        if not isinstance(meanings, list) or not meanings or not all(isinstance(item, str) for item in meanings):
+            return []
+        source = canonical_json(meanings).decode()
+        return [ExtractedUnit("/4", "glossary_set", source, protected_tokens("glossary_set", source))]
+    if pipeline_version == "dojg-v1":
+        return [
+            ExtractedUnit(segment.pointer, DOJG_ROLE, segment.source_text, segment.protected_tokens)
+            for segment in extract_dojg_segments(row)
+        ]
+    if pipeline_version == "lexicographer-v2" and isinstance(row[5], list) and row[5] and all(
+        isinstance(item, str) for item in row[5]
+    ):
+        source = canonical_json(row[5]).decode()
+        return [ExtractedUnit("/5", "glossary_set", source, protected_tokens("glossary_set", source))]
     walker = _walk_lexicographer if pipeline_version == "lexicographer-v2" else _walk
     return list(walker(row[5], "/5"))
+
+
+def kanjidic_context(row: list[Any]) -> dict[str, Any]:
+    """Return read-only KANJIDIC evidence without treating metadata as text."""
+    return {
+        "dictionary": "KANJIDIC2",
+        "kanji": row[0],
+        "on_readings": row[1],
+        "kun_readings": row[2],
+        "character_class": row[3],
+        "source_gloss_evidence": row[4],
+        "metadata": row[5],
+        "preservation_rule": "Keep the kanji, readings, class, codes, and numeric metadata unchanged.",
+    }
 
 
 def _selector_nodes(node: Any, wanted: str) -> Iterator[dict[str, Any]]:
@@ -211,6 +242,13 @@ def lexicographic_context(row: list[Any]) -> dict[str, Any]:
         nodes = list(_selector_nodes(row[5], selector))
         if nodes:
             inventory.append({"element": selector, "count": len(nodes), "content": [_visible_text(item) for item in nodes]})
+    if not senses and isinstance(row[5], list) and all(isinstance(item, str) for item in row[5]):
+        senses.append({
+            "sense_id": "sense-1",
+            "source_gloss_evidence": row[5],
+            "linguistic_metadata": [],
+            "examples": [],
+        })
     return {"senses": senses, "preservation_inventory": inventory}
 
 
@@ -387,7 +425,7 @@ def extract_selected(
         json_wall += time.monotonic() - detail_started
         detail_started = time.monotonic()
         units = extract_article_units(source, pipeline_version)
-        pointers = {unit.pointer for unit in units}
+        pointers = {translation_pointer_base(unit.pointer) for unit in units}
         fingerprint = structural_fingerprint(source, pointers)
         structure_wall += time.monotonic() - detail_started
         pending_articles.append((run_id, article["id"], fingerprint))

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "run_id": 2,
+  "mapping_source": "approved_yomitan_kanjidic_ru_lexical_audit_v1",
+  "changes": [
+    {
+      "unit_id": "u-r2-188-03c9c96bc699",
+      "source_sha256": "055be088756c3a3adbe86b9365aefd0f5fb88f1a0d90b80e3838d113abcf4078",
+      "previous_target_sha256": "760cc16e5d9cc1c7a046fd9208388d9797c26b3f311bfe0568204e28e4970096",
+      "canonical_target_text": "[\"применять\",\"отвечать\",\"откликаться\",\"да\",\"одобрять\",\"принимать\"]"
+    },
+    {
+      "unit_id": "u-r2-2153-03c9c96bc699",
+      "source_sha256": "cfbf9191e594747d2865be55646fc22a2416e73ba1dc1ad2cdafc5544215d7ed",
+      "previous_target_sha256": "9d69fc7bbdbc17116ed4be3b0579b064b45cd49524aab8c62ca5b04e5b578ffc",
+      "canonical_target_text": "[\"римская цифра два\",\"два\",\"второй\"]"
+    },
+    {
+      "unit_id": "u-r2-2398-03c9c96bc699",
+      "source_sha256": "555693e038e9b0ce1a68dd936dfc11121fdc09fce4511067d688e9c8b9a26df2",
+      "previous_target_sha256": "15603af3be3a675ed774a8d882ab5501d8d1e0ee4c516f10f74c837274b9bf43",
+      "canonical_target_text": "[\"важная персона\",\"гость\"]"
+    },
+    {
+      "unit_id": "u-r2-2482-03c9c96bc699",
+      "source_sha256": "96de480eda4527edfc3b2c9c6dfc144abc4aad7794742ed4e5a5304d46f631be",
+      "previous_target_sha256": "70f50f559deb20d510cc1d95fc38d69f6677afcc1c00951bbda5210e65d92bfe",
+      "canonical_target_text": "[\"рис\",\"США\",\"метр\"]"
+    },
+    {
+      "unit_id": "u-r2-3787-03c9c96bc699",
+      "source_sha256": "3262d807d9f2c8d62a35163dd54be7081e83104048f963b3a1352bd1f1d09626",
+      "previous_target_sha256": "7b3c014adf05f2619b16d4944deb6084922ca147fbbf10904fb9a4018cf267f3",
+      "canonical_target_text": "[\"отвечать\",\"да\",\"одобрять\",\"принимать\"]"
+    },
+    {
+      "unit_id": "u-r2-3958-03c9c96bc699",
+      "source_sha256": "65e5b90b512f37b93cfa10e9888a8e2249be61de11305dbcfeca4ab2c0a1cedc",
+      "previous_target_sha256": "3ed1f3901e4b4df2e5861edcdfb0572905a21b59c5accc3ea3ae1ae672d11d0a",
+      "canonical_target_text": "[\"правая часть иероглифа\",\"одновременно\"]"
+    },
+    {
+      "unit_id": "u-r2-6412-03c9c96bc699",
+      "source_sha256": "356d50a4f754a506cd496c7539708e75aa727f7beec2234a30f3bfa7959a3154",
+      "previous_target_sha256": "ec6a9138a5d6d9957ab34b1fbc097e35a32d1d4ff2900e206799cec994e22489",
+      "canonical_target_text": "[\"фамилия\",\"имя божества\",\"транслитерация санскритского «кх»\"]"
+    },
+    {
+      "unit_id": "u-r2-6774-03c9c96bc699",
+      "source_sha256": "c69ad92a15cc119e638879257a246936d6cfc0787fb87edc8cebd8643c27c39e",
+      "previous_target_sha256": "72aec51aef6f55fd83346b961c44eac2d81c0d9a61a6dc33afe2a02f7f020b97",
+      "canonical_target_text": "[\"трудный\",\"тяжёлый\",\"испытывать горе\",\"похороны родителя\",\"траур\",\"опасный\"]"
+    },
+    {
+      "unit_id": "u-r2-6963-03c9c96bc699",
+      "source_sha256": "80fc8b8e00fa938699c6ab60c7272bfd0b847fceda1a542f66f8ed6139b24ea9",
+      "previous_target_sha256": "83bafc929d3a731e2f3aeba877524c0762229f3fe99cc26d7cab0d459c1f7019",
+      "canonical_target_text": "[\"имя матери древнего императора\",\"Цян Юань, супруга Гу\"]"
+    },
+    {
+      "unit_id": "u-r2-8799-03c9c96bc699",
+      "source_sha256": "1fab067e7763efd83d28310b40679056bb55c52cab8293832581387976fdcd0a",
+      "previous_target_sha256": "580a5a7d0737aea11d6dc16b9a8be81c5730a6bbbdc8e2a4982325532bc67af8",
+      "canonical_target_text": "[\"используется в «Мэйбоку Сэндайхаги»\"]"
+    },
+    {
+      "unit_id": "u-r2-9266-03c9c96bc699",
+      "source_sha256": "f94b05d4c715951a2154d66dcde8734c9b191550d4983a19319a609a8ae7bb9a",
+      "previous_target_sha256": "e6b7cc92c04e40049cb971cb580d8c5b29c7ffd887b8dcebf41ddcd895d45c40",
+      "canonical_target_text": "[\"феодальное государство, существовавшее в 700–469 годах до н. э., ныне в Шаньдуне\"]"
+    },
+    {
+      "unit_id": "u-r2-9411-03c9c96bc699",
+      "source_sha256": "6f5073a7496b8cff2cc93f9dddaac590b440f9fc26ba17b912979634e80e67e0",
+      "previous_target_sha256": "0cc595ce8d16202ed2f61a128135eee3f5dc817ce6d8bd53b05d2fb10f20bbc0",
+      "canonical_target_text": "[\"древняя мера веса — 6 унций\"]"
+    },
+    {
+      "unit_id": "u-r2-9494-03c9c96bc699",
+      "source_sha256": "9932d79e36768dd69f58d7ddfdb228dd862c9b169fd90ffc1019748039e2838b",
+      "previous_target_sha256": "e4263524e49e2e10f93e4648e171464f429f8963ea02114089c1f74a4c10792c",
+      "canonical_target_text": "[\"толпа\",\"санскритская транслитерация «кшо»\",\"например, Акшобхья\"]"
+    }
+  ]
+}

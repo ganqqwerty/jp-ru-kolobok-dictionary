@@ -1,0 +1,46 @@
+[project]
+work_dir = "work/kanjidic"
+dist_dir = "dist"
+target_language = "ru"
+
+[database]
+backend = "postgresql"
+url_env = "KANJIDIC_POSTGRES_URL"
+pool_max = 8
+checkout_timeout_seconds = 10
+
+[source]
+version = "kanjidic2"
+sha256 = "f5a7ed6ff6e77bef02f939506df92b37cd4338ec99aa653fcdf2874492fb96f0"
+filename = "[Kanji] KANJIDIC (English) (Recommended).zip"
+title = "KANJIDIC (English)"
+
+[product]
+title = "KANJIDIC — русские значения кандзи"
+revision = "kanjidic-ru-v1.0"
+description = "Русские значения кандзи. Производный перевод KANJIDIC2. Чтения, коды и справочные данные сохранены."
+output = "kanjidic-ru-v1.0-yomitan.zip"
+
+[versions]
+extractor = "extractor-kanjidic-v1"
+terminology = "kanjidic-ru-v1"
+pipeline = "kanjidic-v1"
+translation_prompt = "translate-luna-kanjidic-ru-v1"
+review_prompt = "review-terra-luna-blind-v4"
+
+[models.translation]
+id = "gpt-5.6-luna"
+reasoning_effort = "medium"
+
+[models.review]
+id = "gpt-5.6-terra"
+reasoning_effort = "medium"
+
+[batch]
+soft_max_articles = 12
+soft_max_bytes = 24576
+soft_max_units = 100
+singleton_threshold_bytes = 16384
+hard_max_article_bytes = 49152
+hard_max_article_units = 200
+structured_output_contract = "per-manifest-v3"

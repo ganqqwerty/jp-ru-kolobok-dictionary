@@ -1,0 +1,56 @@
+[project]
+work_dir = "work/dojg"
+dist_dir = "dist"
+target_language = "ru"
+
+[database]
+backend = "postgresql"
+url_env = "DOJG_POSTGRES_URL"
+pool_max = 4
+checkout_timeout_seconds = 10
+
+[source]
+version = "DOJG_v1.01;2022-04-30;better formatting"
+sha256 = "d75584cb93ec505e56842c2276012dd281f444811373152770b1e1dc2eea63ac"
+filename = "dictionary-of-japanese-grammar-v1.01.zip"
+title = "日本語文法辞典(全集)"
+
+[product]
+title = "日本語文法辞典 — русский перевод"
+revision = "dojg-ru-v1.0"
+description = "Русский перевод учебных объяснений и примеров из Dictionary of Japanese Grammar. Японские примеры и структура исходного словаря сохранены."
+output = "jp-ru-dojg-v1.0-yomitan.zip"
+
+[versions]
+extractor = "extractor-dojg-v4"
+terminology = "dojg-ru-v1"
+pipeline = "dojg-v1"
+translation_prompt = "translate-luna-dojg-ru-v2"
+review_prompt = "review-terra-luna-blind-v4"
+
+[models.translation]
+id = "gpt-5.6-luna"
+reasoning_effort = "medium"
+
+[models.review]
+id = "gpt-5.6-terra"
+reasoning_effort = "medium"
+
+[batch]
+soft_max_articles = 4
+soft_max_bytes = 32768
+soft_max_units = 80
+singleton_threshold_bytes = 24576
+hard_max_article_bytes = 98304
+hard_max_article_units = 240
+structured_output_contract = "per-manifest-v3"
+
+[schemas.index]
+url = "https://raw.githubusercontent.com/yomidevs/yomitan/649cfb0bdfe7b156447202b151f049784e8468dc/ext/data/schemas/dictionary-index-schema.json"
+sha256 = "dde43ca9ef1580ab638f49bb13bd7d5c55646afd655ff99cf429492598feb69b"
+filename = "dictionary-index-schema.json"
+
+[schemas.term_bank_v3]
+url = "https://raw.githubusercontent.com/yomidevs/yomitan/649cfb0bdfe7b156447202b151f049784e8468dc/ext/data/schemas/dictionary-term-bank-v3-schema.json"
+sha256 = "665904fcaac715a018a7df6b49d3ace08390d614a9da4f62222bce32c8030b87"
+filename = "dictionary-term-bank-v3-schema.json"

@@ -4,8 +4,12 @@ from .database import ConnectionLike, RowLike
 
 import copy
 import json
+from collections import defaultdict
 from typing import Any
 
+from .dojg import (
+    DOJG_ROLE, parse_dojg_pointer, rebuild_dojg_segment, translation_pointer_base,
+)
 from .extract_units import NON_TRANSLATABLE_KEYS
 from .util import json_pointer_get, json_pointer_set, sha256_bytes, structural_fingerprint
 
@@ -96,7 +100,7 @@ def apply_article(
         accepted_complete = all(row["translation_id"] is not None for row in rows)
     if not accepted_complete:
         raise ValueError(f"article {article['id']} has unaccepted translation units")
-    pointers = {row["json_pointer"] for row in all_units}
+    pointers = {translation_pointer_base(row["json_pointer"]) for row in all_units}
     if unit_rows is None:
         run_article = connection.execute(
             "SELECT structural_fingerprint FROM run_article WHERE run_id=? AND article_id=?",
@@ -108,9 +112,17 @@ def apply_article(
     if structural_fingerprint(source, pointers) != expected_fingerprint:
         raise ValueError(f"article {article['id']} source structural fingerprint changed")
     output = copy.deepcopy(source)
+    dojg_rows: dict[str, list[tuple[int, int, RowLike]]] = defaultdict(list)
     for row in rows:
         if sha256_bytes(row["target_text"].encode()) != row["target_sha256"]:
             raise ValueError(f"accepted target hash changed at {row['json_pointer']}")
+        if row["role"] == DOJG_ROLE:
+            parsed = parse_dojg_pointer(row["json_pointer"])
+            if parsed is None:
+                raise ValueError(f"invalid DOJG pointer at {row['json_pointer']}")
+            base, start, end = parsed
+            dojg_rows[base].append((start, end, row))
+            continue
         current = json_pointer_get(output, row["json_pointer"])
         expected_source = json.loads(row["source_text"]) if row["role"] == "glossary_set" else row["source_text"]
         if row["role"] == "glossary_set":
@@ -132,9 +144,29 @@ def apply_article(
             continue
         json_pointer_set(output, row["json_pointer"], translated)
         _set_language_for_leaf(output, row["json_pointer"])
+    for base, segment_rows in dojg_rows.items():
+        original_value = json_pointer_get(source, base)
+        if not isinstance(original_value, str):
+            raise ValueError(f"DOJG source is not text at {base}")
+        previous_end = -1
+        for start, end, _row in sorted(segment_rows):
+            if start < previous_end or end > len(original_value):
+                raise ValueError(f"overlapping or invalid DOJG span at {base}")
+            previous_end = end
+        translated_value = original_value
+        for start, end, row in sorted(segment_rows, reverse=True):
+            replacement = rebuild_dojg_segment(
+                original_value[start:end], row["source_text"], row["target_text"],
+            )
+            translated_value = translated_value[:start] + replacement + translated_value[end:]
+        json_pointer_set(output, base, translated_value)
     # Language edits are the only structural exception, checked by reverting them.
     comparison = copy.deepcopy(output)
+    for base in dojg_rows:
+        json_pointer_set(comparison, base, json_pointer_get(source, base))
     for row in rows:
+        if row["role"] == DOJG_ROLE:
+            continue
         current_source = json_pointer_get(source, row["json_pointer"])
         original = json.loads(row["source_text"]) if row["role"] == "glossary_set" else current_source
         json_pointer_set(comparison, row["json_pointer"], original)

@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .db import audit, transaction
-from .extract_units import glossary_evidence, lexicographic_context, protected_tokens, semantic_context
+from .dojg import DOJG_ROLE, dojg_segment_context
+from .extract_units import (
+    glossary_evidence, kanjidic_context, lexicographic_context, protected_tokens, semantic_context,
+)
 from .prep_metrics import PrepMetrics
 from .util import atomic_write, canonical_json, json_pointer_get, sha256_bytes
 
@@ -85,23 +88,38 @@ def _article_envelope(
     evidence: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     source = json.loads(article["raw_json"])
+    kanjidic = any(unit["role"] == "glossary_set" and unit["json_pointer"] == "/4" for unit in units)
+    glossary_index = 4 if kanjidic else 5
+    plain_glossary = (
+        isinstance(source[glossary_index], list)
+        and all(isinstance(item, str) for item in source[glossary_index])
+    )
     lexicographer = any(unit["role"] == "glossary_set" for unit in units)
+    dojg = any(unit["role"] == DOJG_ROLE for unit in units)
     prepared_units = []
     for unit in units:
-        preserved = list(dict.fromkeys([
-            *json.loads(unit["protected_tokens_json"]),
-            *protected_tokens(unit["role"], unit["source_text"]),
-        ]))
+        preserved = list(dict.fromkeys(
+            json.loads(unit["protected_tokens_json"])
+            if unit["role"] == DOJG_ROLE else [
+                *json.loads(unit["protected_tokens_json"]),
+                *protected_tokens(unit["role"], unit["source_text"]),
+            ]
+        ))
         prepared = {
             "unit_id": unit["id"], "source_sha256": unit["source_sha256"], "role": unit["role"],
-            "protected_tokens": preserved, "local_context": unit["role"],
+            "protected_tokens": preserved,
+            "local_context": (
+                dojg_segment_context(source, unit["json_pointer"])
+                if unit["role"] == DOJG_ROLE else unit["role"]
+            ),
         }
         if unit["role"] == "glossary_set":
-            prepared["english_gloss_evidence"] = glossary_evidence(unit["source_text"])
+            evidence_key = "source_gloss_evidence" if plain_glossary else "english_gloss_evidence"
+            prepared[evidence_key] = glossary_evidence(unit["source_text"])
             prepared["instruction"] = "author one variable-length list of Russian dictionary definitions"
         else:
             prepared["source_text"] = unit["source_text"]
-        if tag_catalog is not None:
+        if tag_catalog is not None and unit["role"] != DOJG_ROLE:
             required = _required_tag_terminology(source, unit["json_pointer"], tag_catalog)
             if required is not None:
                 prepared["required_terminology"] = required
@@ -110,7 +128,19 @@ def _article_envelope(
         "article_id": f"a-{article['id']}", "source_sha256": article["source_sha256"],
         "term": article["expression"], "reading": article["reading"], "sequence": article["sequence"],
         "kaishi_evidence": _evidence(connection, article["id"]) if evidence is None else evidence,
-        "read_only_context": lexicographic_context(source) if lexicographer else semantic_context(source),
+        "read_only_context": (
+            {
+                "dictionary": "Dictionary of Japanese Grammar",
+                "volume": source[7],
+                "entry_heading": source[0],
+                "preservation_rule": "Japanese placeholders and source layout are immutable.",
+            }
+            if dojg else (
+                kanjidic_context(source) if kanjidic else (
+                    lexicographic_context(source) if lexicographer else semantic_context(source)
+                )
+            )
+        ),
         "units": prepared_units,
     }
 
@@ -123,17 +153,25 @@ def _uses_lexicographer(articles: list[dict[str, Any]]) -> bool:
     )
 
 
+def _manifest_pipeline(articles: list[dict[str, Any]]) -> str:
+    if any(unit["role"] == DOJG_ROLE for article in articles for unit in article["units"]):
+        return "dojg-v1"
+    if any(article.get("read_only_context", {}).get("dictionary") == "KANJIDIC2" for article in articles):
+        return "kanjidic-v1"
+    return "lexicographer-v2" if _uses_lexicographer(articles) else "scalar-v1"
+
+
 def _manifest_payload(
     batch_id: str, articles: list[dict[str, Any]], terminology: dict[str, str],
     manifest_sha256: str = "",
 ) -> dict[str, Any]:
-    lexicographer = _uses_lexicographer(articles)
+    pipeline = _manifest_pipeline(articles)
     payload = {
-        "schema_version": 2 if lexicographer else 1, "pipeline": "lexicographer-v2" if lexicographer else "scalar-v1",
+        "schema_version": 2 if pipeline != "scalar-v1" else 1, "pipeline": pipeline,
         "batch_id": batch_id, "manifest_sha256": manifest_sha256,
         "target_language": "ru", "terminology": terminology, "articles": articles,
     }
-    if not lexicographer:
+    if pipeline == "scalar-v1":
         payload.pop("pipeline")
     return payload
 
@@ -151,9 +189,10 @@ def _manifest_size(
     empty = _manifest_payload(
         "b-" + "0" * 24, [], terminology, "0" * 64,
     )
-    if _uses_lexicographer(articles):
+    pipeline = _manifest_pipeline(articles)
+    if pipeline != "scalar-v1":
         empty["schema_version"] = 2
-        empty["pipeline"] = "lexicographer-v2"
+        empty["pipeline"] = pipeline
     serialized_empty = len(canonical_json(empty))
     article_bytes = sum(article_sizes[id(article)] for article in articles)
     return serialized_empty + article_bytes + max(0, len(articles) - 1)
@@ -457,6 +496,45 @@ def claim(
 def retry_or_split(connection: ConnectionLike, batch_id: str, *, max_attempts: int = 3) -> dict[str, Any]:
     with transaction(connection, immediate=True):
         return _retry_or_split_locked(connection, batch_id, max_attempts=max_attempts)
+
+
+def close_superseded_batches(connection: ConnectionLike, run_id: int) -> list[str]:
+    """Close queued split batches whose units were satisfied by another batch."""
+    rows = connection.execute(
+        """SELECT b.id FROM batch b WHERE b.run_id=?
+        AND b.state IN ('ready','retryable')
+        AND EXISTS (SELECT 1 FROM batch_item bi WHERE bi.batch_id=b.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM batch_item bi JOIN translation_unit tu ON tu.id=bi.unit_id
+          WHERE bi.batch_id=b.id AND tu.status<>'translated'
+        ) ORDER BY b.id""",
+        (run_id,),
+    ).fetchall()
+    closed: list[str] = []
+    with transaction(connection, immediate=True):
+        for row in rows:
+            batch_id = row["id"]
+            updated = connection.execute(
+                """UPDATE batch SET state='deterministic_validated',
+                lease_token=NULL,lease_expires_at=NULL
+                WHERE id=? AND run_id=? AND state IN ('ready','retryable')""",
+                (batch_id, run_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError(f"batch state changed for {batch_id}")
+            connection.execute(
+                """UPDATE validation_issue SET resolved_at=CURRENT_TIMESTAMP,
+                waiver_reason='all units satisfied by another deterministically valid split batch'
+                WHERE resolved_at IS NULL AND attempt_id IN (
+                  SELECT id FROM attempt WHERE batch_id=?
+                )""",
+                (batch_id,),
+            )
+            audit(connection, "close_superseded_batch", "batch", batch_id, {
+                "reason": "all units translated by another deterministically valid split batch",
+            })
+            closed.append(batch_id)
+    return closed
 
 
 def _retry_or_split_locked(

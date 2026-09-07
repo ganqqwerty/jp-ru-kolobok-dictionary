@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "run_id": 5,
+  "repairs": [
+    {
+      "unit_id": "u-r5-172-4717770d7962",
+      "target_text": "Это исследование основано на исторических документах пятисотлетней давности.",
+      "reason": "Replace a malformed mixed-language number phrase."
+    },
+    {
+      "unit_id": "u-r5-224-cd7ac7854beb",
+      "target_text": "Междометие, которое используется, когда говорящий подчёркнуто даёт ожидаемый ответ на вопрос.",
+      "reason": "Translate one English adverb left in the Russian sentence."
+    },
+    {
+      "unit_id": "u-r5-264-c8bae102d521",
+      "target_text": "Частица, которая подчёркнуто утверждает или отрицает суждение, выраженное предшествующими глагольными и другими связанными с ними элементами.",
+      "reason": "Translate one English adverb left in the Russian sentence."
+    },
+    {
+      "unit_id": "u-r5-290-3cf1792fc8b7",
+      "target_text": "Форма изменения глагола вспомогательного слова бэкида, используемая для обозначения цели или намерения.",
+      "reason": "Use Russian transliteration for an unquoted Japanese term."
+    },
+    {
+      "unit_id": "u-r5-317-6105d2fde168",
+      "target_text": "{V/прилагательное⟦J0001⟧}неформальное прошедшее время",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-317-f2b73a5d30ad",
+      "target_text": "{прилагательное⟦J0001⟧ основа/существительное}⟦J0002⟧",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-317-e235e0c819ab",
+      "target_text": "{V/прилагательное ⟦J0001⟧}неформальное(⟦J0002⟧)⟦J0003⟧",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-317-10f795560f7c",
+      "target_text": "{прилагательное ⟦J0001⟧ основа/существительное}{∅/⟦J0002⟧/⟦J0003⟧(⟦J0004⟧)}⟦J0005⟧",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-317-e47f67ca82df",
+      "target_text": "{V/прилагательное(⟦J0001⟧/⟦J0002⟧)/существительное+связка}неформальное ⟦J0003⟧",
+      "reason": "Translate three English grammar labels."
+    },
+    {
+      "unit_id": "u-r5-334-5bb63204e207",
+      "target_text": "Где предложение — сравнение или метафора",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-345-3348e42cdebc",
+      "target_text": "{V/прилагательное ⟦J0001⟧}разговорная форма⟦J0002⟧",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-345-0d96ca2af9ae",
+      "target_text": "{существительное/прилагательное ⟦J0001⟧основа}{⟦J0002⟧/⟦J0003⟧}⟦J0004⟧",
+      "reason": "Translate two English grammar labels."
+    },
+    {
+      "unit_id": "u-r5-355-40e5dc666f4e",
+      "target_text": "Где существительное обозначает время",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-356-40e5dc666f4e",
+      "target_text": "Если существительное обозначает время",
+      "reason": "Translate an English grammar label."
+    },
+    {
+      "unit_id": "u-r5-438-8110172baae1",
+      "target_text": "Согласно словарю, для слова «sabishii» используются два иероглифа: «⟦J0001⟧», «⟦J0002⟧».",
+      "reason": "Mark a retained romanized Japanese word as object language."
+    }
+  ]
+}

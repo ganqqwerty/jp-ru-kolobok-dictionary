@@ -78,25 +78,27 @@ def headword_progress(connection: ConnectionLike, run_id: int) -> tuple[int, int
 
 def workload_progress(connection: ConnectionLike, run_id: int) -> dict[str, int]:
     """Return production-complete workload counts for one exact metric snapshot."""
-    complete = """(
-      EXISTS (SELECT 1 FROM translation t WHERE t.run_id=tu.run_id AND t.unit_id=tu.id
-              AND t.accepted=1)
-      OR EXISTS (SELECT 1 FROM batch_item bi WHERE bi.unit_id=tu.id AND EXISTS (
-                 SELECT 1 FROM batch b WHERE b.id=bi.batch_id AND b.run_id=tu.run_id
-                   AND b.state='deterministic_validated'))
-    )"""
-    unit_row = connection.execute(
-        f"""SELECT COUNT(*),COALESCE(SUM(LENGTH(source_text)),0)
-        FROM translation_unit tu WHERE tu.run_id=? AND {complete}""",
-        (run_id,),
+    row = connection.execute(
+        """WITH completed_unit AS MATERIALIZED (
+          SELECT unit_id FROM translation WHERE run_id=? AND accepted=1
+          UNION
+          SELECT bi.unit_id FROM batch_item bi JOIN batch b ON b.id=bi.batch_id
+          WHERE b.run_id=? AND b.state='deterministic_validated'
+        ), progress AS (
+          SELECT COUNT(cu.unit_id) completed_units,
+                 COALESCE(SUM(LENGTH(tu.source_text)) FILTER (WHERE cu.unit_id IS NOT NULL),0)
+                   source_characters,
+                 COUNT(DISTINCT tu.article_id) FILTER (WHERE cu.unit_id IS NULL)
+                   incomplete_articles
+          FROM translation_unit tu LEFT JOIN completed_unit cu ON cu.unit_id=tu.id
+          WHERE tu.run_id=?
+        )
+        SELECT completed_units,source_characters,
+               (SELECT COUNT(*) FROM run_article WHERE run_id=?)-incomplete_articles
+        FROM progress""",
+        (run_id, run_id, run_id, run_id),
     ).fetchone()
-    units, source_characters = unit_row[0], unit_row[1]
-    articles = connection.execute(
-        f"""SELECT (SELECT COUNT(*) FROM run_article WHERE run_id=?)
-        - COUNT(DISTINCT tu.article_id)
-        FROM translation_unit tu WHERE tu.run_id=? AND NOT {complete}""",
-        (run_id, run_id),
-    ).fetchone()[0]
+    units, source_characters, articles = row[0], row[1], row[2]
     headwords, _ = headword_progress(connection, run_id)
     return {
         "headwords": int(headwords), "articles": int(articles), "units": int(units),

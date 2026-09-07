@@ -2452,3 +2452,21 @@ HIST-SURASURA-R1-4 — Acceptance stored 5,369 translations. Validation reported
 HIST-SURASURA-R1-5 — The verified archive is `dist/jp-ru-surasura-onomatopoeia-v1.0-yomitan.zip`, SHA-256 `7c19d03d91cf5a0bd44ba8e748a1fea390f088d704fd547385476122755c3015`. It contains all 1,422 source entries and one schema-valid term bank. A second export was byte-identical. The full test suite passed with two expected PostgreSQL integration skips.
 
 HIST-SURASURA-R1-6 — The PostgreSQL backup is `work/surasura/backups/surasura-translation-run1.dump`, SHA-256 `2861fcade2a899ea30d118a3d8030a073af6e13dbf2e83fb1c6a8926adae6103`. The archive keeps the source author, attribution, and project URL. Its title is `surasura 擬声語 — русский` and its revision is `surasura-ru-2026.08.30`.
+
+## HIST-DOJG-R5 — Dictionary of Japanese Grammar run 5
+
+HIST-DOJG-R5-1 — Run 5 translated the supplied Dictionary of Japanese Grammar in the isolated PostgreSQL database `dojg_translation`. The source SHA-256 is `d75584cb93ec505e56842c2276012dd281f444811373152770b1e1dc2eea63ac`. The source contains 535 entries and 9,408 English learner-text units. Japanese examples and structure stayed outside the translation units.
+
+HIST-DOJG-R5-2 — The run used `gpt-5.6-luna`, medium reasoning, `prompts/translate_luna_dojg_ru_v2.txt`, and concurrency 20. It reused 366 accepted pilot units and translated 9,042 new units. The database records 410 attempts and 8,718,428 total tokens during about 66 minutes of attempt time.
+
+HIST-DOJG-R5-3 — Other Luna jobs used up to 200 workers on the same account. Shared load caused rate limits and five-minute timeouts. Every failed request returned safely to the queue. Complete saved responses were revalidated after narrow validator fixes, so Luna did not repeat successful work.
+
+HIST-DOJG-R5-4 — The final state has 9,408 translated and accepted units, zero terminal blocked batches, and zero unresolved validation errors. Seventeen blocked rows remain only as split-parent provenance. The audited repair file `repairs/dojg-run5-final.json`, SHA-256 `90da6073d1f202903bc26b47642269e00c2126be58e59dcd22f0d26e2702df8e`, fixed 15 residual English targets and recorded every change.
+
+HIST-DOJG-R5-5 — The verified archive is `dist/jp-ru-dojg-v1.0-yomitan.zip`, SHA-256 `0cbcdcaf2443785474d7f6f63206b254e73bda15e9e27fb066cfe273b9aaddbd`. It contains all 535 entries and one schema-valid term bank. A second export was byte-identical. The full suite passed 194 tests with two expected PostgreSQL integration skips.
+
+HIST-DOJG-R5-6 — The final backup is `work/dojg/backups/dojg-run5-final.dump`, SHA-256 `92b7e0dea41654017751d31ad2a092f1177e14f68b9caf27d792e01d3647db2f`. A fresh database restore reproduced the final archive byte-for-byte. The local page `site-home/dojg-yomitan-check.html` provides six hover targets for the last manual Yomitan gate. Publishing is a separate task.
+
+HIST-DOJG-R5-7 — The user completed the six-term Yomitan hover check on 2026-08-31 and reported that all checks worked. The manual rendering gate passed. Run 5 is ready for a separate publishing task.
+
+HIST-DOJG-R5-8 — The public no-login verification site was published at `https://dojg-russian-yomitan-check.ganqturgon.chatgpt.site`. It provides 22 review cards, 53 Yomitan hover targets, local-only progress, and the verified dictionary download. The public ZIP is byte-identical to the run 5 archive.

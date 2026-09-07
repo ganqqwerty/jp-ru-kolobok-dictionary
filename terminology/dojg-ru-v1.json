@@ -1,0 +1,19 @@
+{
+  "adjective": "прилагательное",
+  "adverb": "наречие",
+  "auxiliary": "вспомогательное слово",
+  "causative": "каузатив",
+  "clause": "придаточная часть",
+  "colloquial": "разговорный",
+  "conjunction": "союз",
+  "copula": "связка",
+  "formal": "формальный",
+  "intransitive verb": "непереходный глагол",
+  "noun": "существительное",
+  "particle": "частица",
+  "passive": "пассив",
+  "predicate": "сказуемое",
+  "stem": "основа",
+  "transitive verb": "переходный глагол",
+  "verb": "глагол"
+}

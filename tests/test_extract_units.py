@@ -1,4 +1,17 @@
+import json
+
 from jitendex_ru.extract_units import extract_article_units, protected_tokens
+
+
+def test_lexicographer_extracts_plain_yomitan_glossary_as_one_set():
+    row = ["人買い", "ひとかい", "", "", 0, ["Menschenhandel", "Sklavenhandel"], 0, "和独辞典"]
+
+    units = extract_article_units(row, "lexicographer-v2")
+
+    assert len(units) == 1
+    assert units[0].pointer == "/5"
+    assert units[0].role == "glossary_set"
+    assert json.loads(units[0].source_text) == ["Menschenhandel", "Sklavenhandel"]
 
 
 def test_scalar_protected_tokens_are_available_to_the_model_and_validator():

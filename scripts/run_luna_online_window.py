@@ -41,12 +41,21 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def runner_revision_sha256() -> str:
+def runner_revision_sha256(config_path: Path | None = None, config: Config | None = None) -> str:
+    selected_config = config_path.resolve() if config_path is not None else ROOT / "config.luna.toml"
     paths = [
-        ROOT / "config.luna.toml", ROOT / "pyproject.toml", ROOT / "uv.lock",
+        selected_config, ROOT / "pyproject.toml", ROOT / "uv.lock",
         ROOT / "scripts/run_codex_batches.py", ROOT / "scripts/run_luna_online_window.py",
-        ROOT / "prompts/translate_luna_v4.txt", ROOT / "terminology/ru-v1.json",
     ]
+    if config is None:
+        paths.extend([ROOT / "prompts/translate_luna_v4.txt", ROOT / "terminology/ru-v1.json"])
+    else:
+        prompt_name = config.raw["versions"]["translation_prompt"].replace("-", "_")
+        terminology_name = config.raw["versions"]["terminology"]
+        paths.extend([
+            config.root / "prompts" / f"{prompt_name}.txt",
+            config.root / "terminology" / f"{terminology_name}.json",
+        ])
     paths.extend(sorted((ROOT / "src/jitendex_ru").glob("*.py")))
     paths.extend(sorted((ROOT / "migrations").rglob("*")))
     digest = hashlib.sha256()
@@ -586,7 +595,7 @@ def main() -> int:
     result = {
         "schema_version": 1, "configuration": configuration,
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        "runner_revision_sha256": runner_revision_sha256(),
+        "runner_revision_sha256": runner_revision_sha256(args.config, config),
         "started_at": started_at, "ended_at": utc_now(),
         "runner_exit": runner_exit, "phases": [
             event for event in events if event.get("event") == "phase"

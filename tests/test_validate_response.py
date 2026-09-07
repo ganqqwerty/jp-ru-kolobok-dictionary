@@ -209,6 +209,105 @@ def test_lexicographer_accepts_variable_length_glossary_but_rejects_duplicates(t
     assert "duplicate_glossary_definition" in {issue["code"] for issue in validate_worker_payload(connection, attempt, payload)}
 
 
+def test_wadoku_profile_allows_broad_glossaries_translated_acronyms_and_taxa(tmp_path):
+    connection, attempt = fixture_db(tmp_path)
+    connection.execute(
+        "UPDATE run SET pipeline_version='lexicographer-v2',extractor_version='extractor-plain-glossary-v1' WHERE id=1"
+    )
+    connection.execute(
+        "UPDATE translation_unit SET role='glossary_set',source_text=?,protected_tokens_json=? WHERE id='u1'",
+        (json.dumps(["UNESCO", "Helicobacter pylori"]), json.dumps(["UNESCO"])),
+    )
+    definitions = [f"русское значение {index}" for index in range(13)]
+    definitions.append("бактерия Helicobacter pylori")
+    payload = {"schema_version": 2, "batch_id": "b1", "manifest_sha256": "f" * 64, "translations": [
+        {"unit_id": "u1", "source_sha256": "sh", "target_text": definitions,
+         "confidence": "high", "review_reason": None}
+    ]}
+
+    assert validate_worker_payload(connection, attempt, payload) == []
+
+
+def test_wadoku_profile_allows_exact_source_scientific_name_definitions(tmp_path):
+    connection, attempt = fixture_db(tmp_path)
+    connection.execute(
+        "UPDATE run SET pipeline_version='lexicographer-v2',extractor_version='extractor-plain-glossary-v1' WHERE id=1"
+    )
+    connection.execute(
+        "UPDATE translation_unit SET role='glossary_set',source_text=?,protected_tokens_json='[]' WHERE id='u1'",
+        (json.dumps([
+            "Wolf\nCanis lupusRaubtier aus der Familie der Hundeartigen",
+            "Brassica campestris var. hakabura",
+            "Oecobius navus\nOecobius annulipeseine Webspinne",
+        ]),),
+    )
+    payload = {"schema_version": 2, "batch_id": "b1", "manifest_sha256": "f" * 64, "translations": [
+        {"unit_id": "u1", "source_sha256": "sh",
+         "target_text": [
+             "волк", "Canis lupus", "разновидность капусты Brassica campestris var. hakabura",
+             "Oecobius navus", "Oecobius annulipes",
+         ],
+         "confidence": "high", "review_reason": None}
+    ]}
+
+    assert validate_worker_payload(connection, attempt, payload) == []
+
+
+def test_wadoku_profile_does_not_treat_person_names_as_scientific_names(tmp_path):
+    connection, attempt = fixture_db(tmp_path)
+    connection.execute(
+        "UPDATE run SET pipeline_version='lexicographer-v2',extractor_version='extractor-plain-glossary-v1' WHERE id=1"
+    )
+    connection.execute(
+        "UPDATE translation_unit SET role='glossary_set',source_text=?,protected_tokens_json='[]' WHERE id='u1'",
+        (json.dumps(["Mino Monta"]),),
+    )
+    payload = {"schema_version": 2, "batch_id": "b1", "manifest_sha256": "f" * 64, "translations": [
+        {"unit_id": "u1", "source_sha256": "sh", "target_text": ["Mino Monta"],
+         "confidence": "high", "review_reason": None}
+    ]}
+
+    codes = {issue["code"] for issue in validate_worker_payload(connection, attempt, payload)}
+    assert "no_cyrillic" in codes
+
+
+def test_wadoku_profile_allows_exact_neutral_tokens_only_beside_russian_text(tmp_path):
+    connection, attempt = fixture_db(tmp_path)
+    connection.execute(
+        "UPDATE run SET pipeline_version='lexicographer-v2',extractor_version='extractor-plain-glossary-v1' WHERE id=1"
+    )
+    connection.execute(
+        "UPDATE translation_unit SET role='glossary_set',source_text=?,protected_tokens_json='[]' WHERE id='u1'",
+        (json.dumps(["System-on-a-Chip", "SoC", "Pikofarad", "pF", "♣", "47", "Eurosat"]),),
+    )
+    payload = {"schema_version": 2, "batch_id": "b1", "manifest_sha256": "f" * 64, "translations": [
+        {"unit_id": "u1", "source_sha256": "sh",
+         "target_text": ["система на кристалле", "SoC", "pF", "♣", "сорок семь", "47"],
+         "confidence": "high", "review_reason": None}
+    ]}
+    assert validate_worker_payload(connection, attempt, payload) == []
+
+    payload["translations"][0]["target_text"] = ["Eurosat"]
+    codes = {issue["code"] for issue in validate_worker_payload(connection, attempt, payload)}
+    assert "no_cyrillic" in codes
+
+    payload["translations"][0]["target_text"] = ["47"]
+    codes = {issue["code"] for issue in validate_worker_payload(connection, attempt, payload)}
+    assert "no_cyrillic" in codes
+
+    connection.execute(
+        "UPDATE translation_unit SET source_text=? WHERE id='u1'", (json.dumps(["PIM"]),),
+    )
+    payload["translations"][0]["target_text"] = ["PIM"]
+    assert validate_worker_payload(connection, attempt, payload) == []
+
+    connection.execute(
+        "UPDATE translation_unit SET source_text=? WHERE id='u1'", (json.dumps(["1988"]),),
+    )
+    payload["translations"][0]["target_text"] = ["1988"]
+    assert validate_worker_payload(connection, attempt, payload) == []
+
+
 def test_glossary_accepts_exact_source_acronym_alongside_russian_definition(tmp_path):
     connection, attempt = fixture_db(tmp_path)
     connection.execute("UPDATE run SET pipeline_version='lexicographer-v2' WHERE id=1")
