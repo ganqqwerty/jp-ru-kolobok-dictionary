@@ -310,6 +310,10 @@ def _progress_report(connection) -> dict[str, Any]:
 
 
 def _validation_report(connection, run_id: int) -> dict[str, Any]:
+    run = connection.execute("SELECT pipeline_version FROM run WHERE id=?", (run_id,)).fetchone()
+    if run is None:
+        raise ValueError(f"unknown run: {run_id}")
+    review_required = run["pipeline_version"] != "wadoku-xml-v2"
     total = connection.execute("SELECT COUNT(*) FROM translation_unit WHERE run_id=?", (run_id,)).fetchone()[0]
     accepted = connection.execute(
         """SELECT COUNT(*) FROM translation_unit tu WHERE tu.run_id=? AND EXISTS (
@@ -330,7 +334,9 @@ def _validation_report(connection, run_id: int) -> dict[str, Any]:
     return {
         "run_id": run_id, "units": total, "accepted_units": accepted, "reviewed_units": reviewed,
         "blocking_issues": blocking, "batch_membership_mismatches": batch_mismatches,
-        "release_ready": total > 0 and accepted == total and reviewed == total and blocking == 0 and batch_mismatches == 0,
+        "release_ready": total > 0 and accepted == total
+        and (not review_required or reviewed == total)
+        and blocking == 0 and batch_mismatches == 0,
     }
 
 

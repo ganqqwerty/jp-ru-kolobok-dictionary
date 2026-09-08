@@ -1,0 +1,55 @@
+[project]
+work_dir = "work/wadoku-xml"
+dist_dir = "dist"
+target_language = "ru"
+
+[database]
+backend = "postgresql"
+url_env = "WADOKU_POSTGRES_URL"
+pool_max = 4
+checkout_timeout_seconds = 10
+
+[versions]
+extractor = "wadoku-xml-v2"
+terminology = "terminology-ru-v1"
+pipeline = "wadoku-xml-v2"
+translation_prompt = "translate-luna-wadoku-xml-ru-v2"
+article_group_prompt = "classify-luna-wadoku-article-groups-ja-v1"
+article_group_rules = "wadoku-article-groups-v1"
+lookup_expansion_prompt = "expand-luna-wadoku-lookups-ja-v1"
+review_prompt = ""
+
+[paths]
+terminology = "terminology/ru-v1.json"
+controlled_labels = "terminology/wadoku-xml-labels-v1.json"
+subentry_groups = "terminology/wadoku-subentry-groups-v1.json"
+
+[models.translation]
+id = "gpt-5.6-luna"
+reasoning_effort = "medium"
+
+[batch]
+soft_max_articles = 100
+soft_max_bytes = 24576
+soft_max_units = 100
+singleton_threshold_bytes = 16384
+hard_max_article_bytes = 49152
+hard_max_article_units = 200
+structured_output_contract = "per-manifest-v3"
+request_timeout_seconds = 240
+
+[source]
+version = "2026-07-05"
+url = "https://www.wadoku.de/downloads/xml-export/wadoku-xml-20260705.tar.xz"
+sha256 = "1028ad3e5d64a14097ae0fef47e57d4615238028b1d0315dbe28082660f07d3b"
+xml_sha256 = "0d6309c00f6735db8d27b79cda8b54b76b0ccdd6422d3345c53b48ed0c69d70e"
+xsd_sha256 = "ecee955186f50b055687c3992761b0bf6fe9e84804c4b3543a7e2172955ca04f"
+license_sha256 = "3e2793cb6b21879abef92003268699e61c98b96462969a2d6d0d9ef388ba051a"
+
+[product.de]
+title = "Wadoku — Japanisch–Deutsch (reich)"
+revision = "2026.07.05.0-wadoku-rich-de"
+
+[product.ru]
+title = "Wadoku — японско-русский словарь (полный)"
+revision = "2026.07.05.0-wadoku-rich-ru"

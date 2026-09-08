@@ -14,7 +14,7 @@ from .dojg import (
 from .extract_units import SOURCE_ACRONYM_RE
 from .util import (
     ASCII_WORD_RE, CONTROL_RE, CYRILLIC_RE, KEY_CHORD_RE, LANGUAGE_ORIGIN_RE,
-    LATIN_TAXON_RE, MIXED_ALPHABET_RE, TAG_RE, canonical_json, sha256_bytes,
+    LATIN_TAXON_RE, MIXED_ALPHABET_RE, TAG_RE, canonical_json, json_pointer_get, sha256_bytes,
     source_xref_taxa,
 )
 
@@ -57,6 +57,84 @@ WADOKU_NEUTRAL_TOKEN_RE = re.compile(
     r"(?:[a-z][A-Za-z0-9.+/-]*|[A-Z][a-z0-9.+/-]*[A-Z][A-Za-z0-9.+/-]*|"
     r"\d+(?:[.,]\d+)?(?:\s*%)?|[^\w\s]{1,3})"
 )
+WADOKU_XML_PLACEHOLDER_RE = re.compile(r"⟦WDXP\d{4}⟧")
+WADOKU_XML_TRANSLATABLE_RE = re.compile(r"[A-Za-z\u00c0-\u024f\u1e00-\u1eff]")
+WADOKU_XML_CHEMICAL_FORMULA_RE = re.compile(r"(?<!\w)(?:[A-Z][a-z]?\d*){2,}(?!\w)")
+WADOKU_XML_FORMULA_ONLY_RE = re.compile(
+    r"[()\[\]{}A-Za-z0-9₀-₉₊₋₌₍₎ₐₑₒₓₔₕₖₗₘₙₚₛₜ"
+    r"⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱᵤ½+−‑\-·.…′°µΩ/:=×≡§\s]+"
+)
+WADOKU_XML_CATALOG_ID_RE = re.compile(
+    r"(?:[A-Z]|[A-Z][A-Za-z]*[A-Z][A-Za-z]*|[A-Z][A-Za-z]*\s+[0-9]+|[A-Z]\s+[0-9]+)"
+)
+WADOKU_XML_UNIT_ONLY_RE = re.compile(
+    r"(?:[fpnumkMGT]?)(?:Ci|Bq|Gy|Sv|Hz|Pa|J|W|V|A|K|mol|cd|g|m|s|l)"
+)
+WADOKU_XML_ISBN_RE = re.compile(r"ISBN:?\s+[0-9Xx-]+")
+WADOKU_XML_EQUATION_RE = re.compile(
+    r"(?=.*\d)(?=.*=)[0-9A-Za-z₀-₉⁰-⁹.,+−‑\-/*=×°Ωµ\s]+"
+)
+WADOKU_XML_NOTATION_SIGNAL_RE = re.compile(
+    r"[0-9₀-₉₊₋₌₍₎⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ᵤ½+−‑/*=×°Ωµ≡…′§:]|(?:[A-Z].*[A-Z])"
+)
+WADOKU_XML_PATH_SEGMENT_RE = re.compile(r"([^/\[]+)\[(\d+)\]")
+WADOKU_XML_STANDARD_ID_RE = re.compile(r"(?:JIS|ISO|IEC|DIN|ASTM)\s+[A-Z0-9][A-Z0-9 .:/-]*")
+WADOKU_XML_MEDICAL_ID_RE = re.compile(r"ICD-?10:\s*[A-Z][0-9.]+", re.IGNORECASE)
+WADOKU_XML_TAXON_SUFFIX_RE = re.compile(
+    r"[A-Z][A-Za-z-]*(?:aceae|idae|inae|ales|ini|phyta|mycota|virus)", re.IGNORECASE,
+)
+WADOKU_XML_NAME_WORD_RE = re.compile(
+    r"[A-Z\u00c0-\u00de\u0100-\u017d][A-Za-z\u00c0-\u024f\u1e00-\u1eff·'’.-]*"
+    r"(?:-[A-Z0-9][A-Za-z0-9-]*)?"
+)
+WADOKU_XML_NAME_CONNECTORS = frozenset({
+    "&", "al", "and", "da", "de", "del", "della", "der", "di", "du", "en", "et", "la",
+    "for", "le", "no", "of", "pour", "the", "un", "und", "van", "von", "y",
+})
+WADOKU_XML_ROMANIZED_MARK_RE = re.compile(
+    r"[ĀĒĪŌŪāēīōūÁÀǍÉÈĚÍÌǏÓÒǑÚÙǓǕǗǙǛǖǘǚǜáàǎéèěíìǐóòǒúùǔ]",
+    re.IGNORECASE,
+)
+WADOKU_XML_FOREIGN_TITLE_RE = re.compile(
+    r"^(?:engl|franz|lat|ital|span|port|niederl|chin|korean)\.\s*(.+)$", re.IGNORECASE,
+)
+WADOKU_XML_LATIN_ENDING_RE = re.compile(
+    r"(?:a|ae|am|arum|as|e|es|i|ii|is|orum|um|us)$", re.IGNORECASE,
+)
+WADOKU_XML_NAME_DOMAINS = frozenset({
+    "Firmenn.", "Flussn.", "Familienn.", "Ländern.", "Ortsn.", "Personenn.",
+    "Persönlichk.", "Stadtn.", "Vorn.", "Wz.",
+})
+WADOKU_XML_SCIENCE_DOMAINS = frozenset({
+    "Anat.", "Biochem.", "Biol.", "Bot.", "Chem.", "Fischk.", "Insektenk.",
+    "Math.", "Med.", "Mykol.", "Pharm.", "Phys.", "Zool.",
+})
+WADOKU_XML_EXACT_LABEL_DOMAINS = frozenset({
+    "EDV", "Firmenn.", "Funkt.", "Gesch.", "Golf", "Internet", "Luftf.",
+    "Maß", "Milit.", "Mus.", "Org.", "Rechtsw.", "Telekom.", "Verlagsn.",
+    "Videospiel", "Wz.",
+})
+WADOKU_XML_EXACT_FOREIGN_LABELS = frozenset({
+    "Chkdsk", "Dir en grey", "Gamescom", "gamescom",
+})
+WADOKU_XML_AMINO_ACID_CODES = frozenset({
+    "Ala", "Arg", "Asn", "Asp", "Cys", "Gln", "Glu", "Gly", "His", "Ile",
+    "Leu", "Lys", "Met", "Phe", "Pro", "Ser", "Thr", "Trp", "Tyr", "Val",
+})
+WADOKU_XML_SOURCE_NAME_RE = re.compile(
+    r"(?<!\w)[A-Z\u00c0-\u00de\u0100-\u017d]"
+    r"[A-Za-z\u00c0-\u024f\u1e00-\u1eff·.-]*"
+    r"(?:\s+[A-Z\u00c0-\u00de\u0100-\u017d]"
+    r"[A-Za-z\u00c0-\u024f\u1e00-\u1eff·.-]*)*"
+)
+WADOKU_XML_PRODUCT_TOKEN_RE = re.compile(
+    r"(?<!\w)(?:[a-z]+[A-Z][A-Za-z]*|[A-Za-z]+-[A-Za-z]+)(?!\w)"
+)
+WADOKU_XML_ABBREVIATION_TOKEN_RE = re.compile(r"\b([A-Za-z]{1,4})\.")
+WADOKU_XML_FOREIGN_TAIL_RE = re.compile(
+    r"(?:\b(?:engl|lat)\.\s*|\bsteht\s+für\s+|^von\s+)(.+)$", re.IGNORECASE,
+)
+WADOKU_XML_ROMAN_NUMERAL_TOKEN_RE = re.compile(r"\b[IVXLCDM]{2,}\b")
 
 
 def allows_japanese_grammar_label(role: str, source_text: str) -> bool:
@@ -207,6 +285,234 @@ def target_storage(role: str, target: Any) -> str:
     return target
 
 
+def wadoku_target_issues(
+    source_text: str, target: Any, protected: list[str], unit_id: str | None = None,
+    *, allow_exact_source: bool = False,
+) -> list[dict[str, Any]]:
+    """Validate one Wadoku XML scalar with the worker-response rules."""
+    neutral_residual = WADOKU_XML_PLACEHOLDER_RE.sub("", source_text).strip()
+    exact_scientific_name = SCIENTIFIC_NAME_RE.fullmatch(neutral_residual) is not None
+    formula_or_identifier = (
+        WADOKU_XML_FORMULA_ONLY_RE.fullmatch(neutral_residual) is not None
+        and WADOKU_XML_NOTATION_SIGNAL_RE.search(neutral_residual) is not None
+    )
+    compact_identifier = WADOKU_XML_CATALOG_ID_RE.fullmatch(neutral_residual) is not None
+    unit_symbol = WADOKU_XML_UNIT_ONLY_RE.fullmatch(neutral_residual) is not None
+    isbn = WADOKU_XML_ISBN_RE.fullmatch(neutral_residual) is not None
+    equation = WADOKU_XML_EQUATION_RE.fullmatch(neutral_residual) is not None
+    biochemical_code = neutral_residual in WADOKU_XML_AMINO_ACID_CODES
+    standard_identifier = WADOKU_XML_STANDARD_ID_RE.fullmatch(neutral_residual) is not None
+    taxon_name = WADOKU_XML_TAXON_SUFFIX_RE.fullmatch(neutral_residual) is not None
+    foreign_name = wadoku_xml_is_foreign_name(neutral_residual)
+    latin_term = wadoku_xml_is_latin_term(neutral_residual)
+    single_latin_taxon = bool(
+        len(neutral_residual) >= 6
+        and re.fullmatch(r"[A-Z][a-z]+", neutral_residual)
+        and WADOKU_XML_LATIN_ENDING_RE.search(neutral_residual)
+    )
+    neutral_target = isinstance(target, str) and WADOKU_XML_TRANSLATABLE_RE.search(target) is None
+    source_equivalent = isinstance(target, str) and wadoku_xml_neutral_equivalent(
+        target, source_text,
+    )
+    allow_unchanged_neutral = (
+        isinstance(target, str)
+        and source_equivalent
+        and (
+            WADOKU_XML_TRANSLATABLE_RE.search(neutral_residual) is None
+            or exact_scientific_name
+            or formula_or_identifier
+            or compact_identifier
+            or unit_symbol
+            or isbn
+            or equation
+            or biochemical_code
+            or standard_identifier
+            or WADOKU_XML_MEDICAL_ID_RE.fullmatch(neutral_residual) is not None
+            or taxon_name
+            or foreign_name
+            or latin_term
+            or single_latin_taxon
+            or neutral_residual in WADOKU_XML_EXACT_FOREIGN_LABELS
+            or allow_exact_source
+        )
+    )
+    allowed_english = list(dict.fromkeys(
+        token
+        for name in WADOKU_XML_SOURCE_NAME_RE.findall(source_text)
+        for token in ASCII_WORD_RE.findall(name)
+    ))
+    if isinstance(target, str) and CYRILLIC_RE.search(target):
+        allowed_english = list(dict.fromkeys([
+            *allowed_english,
+            *WADOKU_XML_PRODUCT_TOKEN_RE.findall(source_text),
+            *WADOKU_XML_ABBREVIATION_TOKEN_RE.findall(source_text),
+            *WADOKU_XML_ROMAN_NUMERAL_TOKEN_RE.findall(target),
+            *wadoku_xml_foreign_tail_tokens(source_text),
+        ]))
+    if allow_unchanged_neutral:
+        allowed_english = list(dict.fromkeys(
+            [*allowed_english, *ASCII_WORD_RE.findall(source_text)],
+        ))
+    foreign_title = WADOKU_XML_FOREIGN_TITLE_RE.match(source_text.strip())
+    if isinstance(target, str) and foreign_title and foreign_title.group(1) in target:
+        allowed_english = list(dict.fromkeys(
+            [*allowed_english, *ASCII_WORD_RE.findall(foreign_title.group(1))],
+        ))
+    issues = [
+        {"code": code, **({"unit_id": unit_id} if unit_id is not None else {})}
+        for code in _plain_text_issues(
+            target, protected, allow_no_cyrillic=allow_unchanged_neutral or neutral_target,
+            allowed_english=allowed_english,
+        )
+    ]
+    if isinstance(target, str):
+        actual_placeholders = WADOKU_XML_PLACEHOLDER_RE.findall(target)
+        if actual_placeholders != protected:
+            issues.append({
+                "code": "wadoku_placeholder_order_or_set_mismatch",
+                **({"unit_id": unit_id} if unit_id is not None else {}),
+                "expected": protected, "actual": actual_placeholders,
+            })
+    return issues
+
+
+def wadoku_xml_is_foreign_name(value: str) -> bool:
+    """Recognize a proper foreign form without accepting ordinary German nouns."""
+    if WADOKU_XML_ROMANIZED_MARK_RE.search(value) is not None or "·" in value:
+        return True
+    words = value.split()
+    if len(words) < 2:
+        return False
+    proper = 0
+    for raw_word in words:
+        word = raw_word.strip(",:;()[]{}")
+        if word.casefold().rstrip(".") in WADOKU_XML_NAME_CONNECTORS:
+            continue
+        normalized_word = word.replace("‑", "-")
+        if (
+            WADOKU_XML_NAME_WORD_RE.fullmatch(normalized_word) is None
+            and ACRONYM_DEFINITION_RE.fullmatch(normalized_word) is None
+            and re.fullmatch(r"[A-Z][A-Za-z]*[A-Z][A-Za-z]*", normalized_word) is None
+        ):
+            return False
+        proper += 1
+    return proper >= 2
+
+
+def wadoku_xml_is_latin_term(value: str) -> bool:
+    """Recognize a multi-word Latin scientific or anatomical form."""
+    words = [word.strip(".,:;()[]{}") for word in value.split()]
+    if (
+        len(words) < 2
+        or not words[0][:1].isupper()
+        or any(not word.isalpha() for word in words)
+    ):
+        return False
+    latin_endings = sum(WADOKU_XML_LATIN_ENDING_RE.search(word) is not None for word in words)
+    return latin_endings >= max(2, len(words) - 1)
+
+
+def wadoku_xml_neutral_equivalent(left: str, right: str) -> bool:
+    """Compare preserved labels while ignoring harmless XML spacing and dash variants."""
+    def normalize(value: str) -> str:
+        normalized = re.sub(r"\s+", " ", value.strip()).replace("‑", "-")
+        return re.sub(r"\s*&\s*", "&", normalized).casefold()
+
+    return normalize(left) == normalize(right)
+
+
+def wadoku_xml_foreign_tail_tokens(source_text: str) -> list[str]:
+    """Return exact source words from a named foreign phrase or abbreviation expansion."""
+    if "=" in source_text:
+        return ASCII_WORD_RE.findall(source_text)
+    match = WADOKU_XML_FOREIGN_TAIL_RE.search(source_text)
+    return ASCII_WORD_RE.findall(match.group(1)) if match else []
+
+
+def wadoku_xml_block_ancestry(raw_json: str, pointer: str) -> list[dict[str, Any]]:
+    """Resolve one canonical block back to its lossless XML ancestry."""
+    try:
+        canonical = json.loads(raw_json)
+        block = json_pointer_get(canonical, pointer)
+        xml_path = block["xml_path"]
+        node = canonical["tree"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return []
+    segments = WADOKU_XML_PATH_SEGMENT_RE.findall(xml_path)
+    if not segments or segments[0][0] != "entry":
+        return []
+    ancestry = [node]
+    for tag, raw_index in segments[1:]:
+        matches = [child for child in node.get("children", []) if child.get("tag") == tag]
+        index = int(raw_index) - 1
+        if index < 0 or index >= len(matches):
+            return []
+        node = matches[index]
+        ancestry.append(node)
+    return ancestry
+
+
+def wadoku_xml_block_is_scientific(raw_json: str, pointer: str) -> bool:
+    """Use canonical XML ancestry to identify an exact scientific source block."""
+    return any(
+        item.get("tag") == "trans"
+        and str(item.get("attributes", {}).get("langdesc", "")).casefold() == "scientific"
+        for item in wadoku_xml_block_ancestry(raw_json, pointer)
+    )
+
+
+def wadoku_xml_block_allows_exact_source(raw_json: str, pointer: str, source_text: str) -> bool:
+    """Use Wadoku sense labels to preserve untagged names and scientific forms."""
+    ancestry = wadoku_xml_block_ancestry(raw_json, pointer)
+    if ancestry:
+        def plain(node: dict[str, Any]) -> str:
+            return str(node.get("text", "")) + "".join(
+                plain(child) + str(child.get("tail", ""))
+                for child in node.get("children", [])
+            )
+
+        def descendants(node: dict[str, Any]) -> list[dict[str, Any]]:
+            return [node, *(item for child in node.get("children", []) for item in descendants(child))]
+
+        if any(
+            item.get("tag") == "foreign" and plain(item).strip() == source_text.strip()
+            for item in descendants(ancestry[0])
+        ):
+            return True
+    if any(
+        item.get("tag") == "trans"
+        and str(item.get("attributes", {}).get("langdesc", "")).casefold() == "scientific"
+        for item in ancestry
+    ):
+        return True
+    sense = next((item for item in reversed(ancestry) if item.get("tag") == "sense"), None)
+    if sense is None:
+        return False
+    domains = {
+        str(child.get("text", "")).strip()
+        for child in sense.get("children", [])
+        if child.get("tag") == "usg" and child.get("attributes", {}).get("type") == "dom"
+    }
+    if domains & WADOKU_XML_NAME_DOMAINS:
+        return True
+    source = source_text.strip()
+    if domains & WADOKU_XML_SCIENCE_DOMAINS:
+        return bool(
+            re.fullmatch(
+                r"[A-Z\u00c0-\u00de\u0100-\u017d][A-Za-z\u00c0-\u024f\u1e00-\u1eff-]*",
+                source,
+            )
+            or WADOKU_XML_FORMULA_ONLY_RE.fullmatch(source)
+        )
+    if domains & WADOKU_XML_EXACT_LABEL_DOMAINS:
+        return bool(
+            re.fullmatch(r"\S+", source)
+            or wadoku_xml_is_foreign_name(source)
+            or WADOKU_XML_FORMULA_ONLY_RE.fullmatch(source)
+        )
+    return False
+
+
 def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payload: Any) -> list[dict[str, Any]]:
     batch = connection.execute("SELECT * FROM batch WHERE id=?", (attempt["batch_id"],)).fetchone()
     issues: list[dict[str, Any]] = []
@@ -218,7 +524,10 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         "SELECT pipeline_version,extractor_version FROM run WHERE id=?", (batch["run_id"],),
     ).fetchone()
     wadoku_plain = run["extractor_version"] == "extractor-plain-glossary-v1"
-    expected_schema = 2 if run["pipeline_version"] in {"lexicographer-v2", "dojg-v1", "kanjidic-v1"} else 1
+    wadoku_xml = run["pipeline_version"] == "wadoku-xml-v2"
+    expected_schema = 2 if run["pipeline_version"] in {
+        "lexicographer-v2", "dojg-v1", "kanjidic-v1", "wadoku-xml-v2",
+    } else 1
     if payload.get("schema_version") != expected_schema:
         issues.append({"code": "wrong_schema_version"})
     if payload.get("batch_id") != batch["id"]:
@@ -246,6 +555,30 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
     if actual_ids != expected_ids:
         issues.append({"code": "unit_order_or_set_mismatch", "expected": expected_ids, "actual": actual_ids})
         return issues
+    wadoku_exact_source: set[str] = set()
+    if wadoku_xml:
+        article_ids = sorted({row["article_id"] for row in expected})
+        placeholders = ",".join("?" for _ in article_ids)
+        raw_by_article = {
+            row["id"]: row["raw_json"]
+            for row in connection.execute(
+                f"SELECT id,raw_json FROM article WHERE id IN ({placeholders})",
+                tuple(article_ids),
+            ).fetchall()
+        }
+        for source, item in zip(expected, translations):
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("target_text"), str)
+                and wadoku_xml_neutral_equivalent(
+                    item["target_text"], source["source_text"],
+                )
+                and wadoku_xml_block_allows_exact_source(
+                    raw_by_article.get(source["article_id"], ""), source["json_pointer"],
+                    source["source_text"],
+                )
+            ):
+                wadoku_exact_source.add(source["id"])
     for source, item in zip(expected, translations):
         if set(item) != {"unit_id", "source_sha256", "target_text", "confidence", "review_reason"}:
             issues.append({"code": "unexpected_translation_fields", "unit_id": source["id"]})
@@ -333,7 +666,7 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
                     issues.append({"code": code, "unit_id": source["id"], "definition_index": index})
         else:
             protected = [] if required_target is not None else json.loads(source["protected_tokens_json"])
-            if source["role"] != DOJG_ROLE:
+            if source["role"] != DOJG_ROLE and not wadoku_xml:
                 protected = [*protected, *KEY_CHORD_RE.findall(source["source_text"])]
                 protected = [*protected, *SOURCE_ACRONYM_RE.findall(source["source_text"])]
                 if source["role"] == "xref_gloss":
@@ -345,20 +678,26 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
                 allowed_english = ENGLISH_GRAMMAR_TOKEN_RE.findall(source["source_text"])
             if source["role"] == DOJG_ROLE:
                 allowed_english = dojg_allowed_english(source["source_text"])
-            for code in _plain_text_issues(
-                target,
-                protected,
-                allow_no_cyrillic=(
-                    (required_target is not None and target == required_target)
-                    or allows_japanese_grammar_label(source["role"], source["source_text"])
-                    or (
-                        source["role"] == DOJG_ROLE
-                        and allows_dojg_notation_only(source["source_text"], target)
-                    )
-                ),
-                allowed_english=allowed_english,
-            ):
-                issues.append({"code": code, "unit_id": source["id"]})
+            if wadoku_xml:
+                issues.extend(wadoku_target_issues(
+                    source["source_text"], target, list(protected), source["id"],
+                    allow_exact_source=source["id"] in wadoku_exact_source,
+                ))
+            else:
+                for code in _plain_text_issues(
+                    target,
+                    protected,
+                    allow_no_cyrillic=(
+                        (required_target is not None and target == required_target)
+                        or allows_japanese_grammar_label(source["role"], source["source_text"])
+                        or (
+                            source["role"] == DOJG_ROLE
+                            and allows_dojg_notation_only(source["source_text"], target)
+                        )
+                    ),
+                    allowed_english=allowed_english,
+                ):
+                    issues.append({"code": code, "unit_id": source["id"]})
             if source["role"] == DOJG_ROLE and isinstance(target, str):
                 if "\n" in target or "|" in target:
                     issues.append({"code": "dojg_structural_delimiter_added", "unit_id": source["id"]})

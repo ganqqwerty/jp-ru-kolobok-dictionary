@@ -47,7 +47,9 @@ def benchmark_database(tmp_path):
         sequence,raw_json,source_sha256,selected) VALUES (1,1,1,1,'語','ご',1,?,'a',1)""",
         (raw,),
     )
-    connection.execute("INSERT INTO run_article VALUES (2,1,'fingerprint')")
+    connection.execute(
+        "INSERT INTO run_article(run_id,article_id,structural_fingerprint) VALUES (2,1,'fingerprint')"
+    )
     connection.execute(
         """INSERT INTO translation_unit(id,run_id,article_id,json_pointer,role,source_text,
         source_sha256,protected_tokens_json,byte_count) VALUES

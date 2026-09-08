@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "policies": [
+    {
+      "subentrytype": "VwBsp",
+      "prior": "mixed",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["deinflect_to_parent", "shared_direct", "independent_direct"],
+      "reason": "Usage examples include both pure inflections such as 知らない and full expressions such as 知らない人."
+    },
+    {
+      "subentrytype": "WIdiom",
+      "prior": "strong_independent",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["independent_direct"],
+      "reason": "An idiom is a lookup expression with its own meaning."
+    },
+    {
+      "subentrytype": "XSatz",
+      "prior": "strong_independent",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["independent_direct"],
+      "reason": "An example sentence is a complete lookup expression."
+    },
+    {
+      "subentrytype": "ZSprW",
+      "prior": "strong_independent",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["independent_direct"],
+      "reason": "A proverb is a complete lookup expression with its own meaning."
+    },
+    {
+      "subentrytype": "head",
+      "prior": "strong_independent",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["independent_direct"],
+      "reason": "These entries normally add a lexical head, as in 参加者."
+    },
+    {
+      "subentrytype": "tail",
+      "prior": "strong_independent",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["independent_direct"],
+      "reason": "These entries normally add a lexical component and form a compound."
+    },
+    {
+      "subentrytype": "saseru",
+      "prior": "productive_inflection",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["deinflect_to_parent", "shared_direct"],
+      "reason": "A causative form can be a pure inflection, but lexicalized cases need classification."
+    },
+    {
+      "subentrytype": "shita",
+      "prior": "productive_inflection",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["deinflect_to_parent", "shared_direct"],
+      "reason": "A した form can be grammatical or part of a larger expression."
+    },
+    {
+      "subentrytype": "shite",
+      "prior": "productive_inflection",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["deinflect_to_parent", "shared_direct"],
+      "reason": "A して form can be grammatical or lexicalized."
+    },
+    {
+      "subentrytype": "ku",
+      "prior": "productive_inflection",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["deinflect_to_parent", "shared_direct"],
+      "reason": "The く form is often an adjective inflection, but context can make a separate expression."
+    },
+    {
+      "subentrytype": "suru",
+      "prior": "productive_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A する form often belongs to a verbal-noun family but needs a direct base lookup."
+    },
+    {
+      "subentrytype": "na",
+      "prior": "productive_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A な form can belong to the same adjective family or form a separate expression."
+    },
+    {
+      "subentrytype": "no",
+      "prior": "particle_or_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A の attachment can be grammatical or part of a lexical expression."
+    },
+    {
+      "subentrytype": "ni",
+      "prior": "particle_or_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A に attachment can be grammatical or part of a lexical expression."
+    },
+    {
+      "subentrytype": "da",
+      "prior": "particle_or_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A だ attachment can be a copular form or a separate expression."
+    },
+    {
+      "subentrytype": "de",
+      "prior": "particle_or_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A で attachment can be grammatical or lexicalized."
+    },
+    {
+      "subentrytype": "e",
+      "prior": "particle_or_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A へ attachment can be grammatical or lexicalized."
+    },
+    {
+      "subentrytype": "kara",
+      "prior": "particle_or_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A から attachment can be grammatical or lexicalized."
+    },
+    {
+      "subentrytype": "to",
+      "prior": "particle_or_form",
+      "decision_mode": "deterministic",
+      "allowed_lookup_policies": ["shared_direct"],
+      "reason": "A と attachment can be grammatical or lexicalized."
+    },
+    {
+      "subentrytype": "teki",
+      "prior": "derivation",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["shared_direct", "independent_direct"],
+      "reason": "A 的 derivative changes grammatical behavior and can be lexicalized."
+    },
+    {
+      "subentrytype": "garu",
+      "prior": "derivation",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["shared_direct", "independent_direct"],
+      "reason": "A がる derivative can remain in one family or become a separate verb."
+    },
+    {
+      "subentrytype": "ge",
+      "prior": "derivation",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["shared_direct", "independent_direct"],
+      "reason": "A げ derivative can have its own lexical meaning."
+    },
+    {
+      "subentrytype": "mi",
+      "prior": "derivation",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["shared_direct", "independent_direct"],
+      "reason": "A み nominalization can have its own lexical meaning."
+    },
+    {
+      "subentrytype": "o",
+      "prior": "derivation",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["shared_direct", "independent_direct"],
+      "reason": "An お-prefixed form can be honorific or lexicalized."
+    },
+    {
+      "subentrytype": "sa",
+      "prior": "derivation",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["shared_direct", "independent_direct"],
+      "reason": "A さ nominalization can have its own lexical meaning."
+    },
+    {
+      "subentrytype": "taru",
+      "prior": "derivation",
+      "decision_mode": "luna_required",
+      "allowed_lookup_policies": ["shared_direct", "independent_direct"],
+      "reason": "A たる form needs lexical classification."
+    }
+  ]
+}

@@ -211,7 +211,11 @@ def accept_deterministic_translations(connection: ConnectionLike, run_id: int) -
     chosen: dict[str, int] = {}
     for row in candidates:
         chosen.setdefault(row["unit_id"], row["id"])
-    connection.executemany("UPDATE translation SET accepted=1 WHERE id=?", ((item,) for item in chosen.values()))
+    connection.executemany(
+        """UPDATE translation SET accepted=1,accepted_at=COALESCE(accepted_at,CURRENT_TIMESTAMP),
+        acceptance_method=COALESCE(acceptance_method,'luna') WHERE id=?""",
+        ((item,) for item in chosen.values()),
+    )
     connection.executemany(
         "UPDATE translation_unit SET status='translated' WHERE id=?", ((item,) for item in chosen),
     )

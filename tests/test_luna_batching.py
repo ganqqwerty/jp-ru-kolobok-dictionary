@@ -176,3 +176,19 @@ def test_article_over_hard_unit_ceiling_is_rejected():
 
     with pytest.raises(ValueError, match=r"article a-1 exceeds a hard article limit"):
         _pack([article], soft_max_units=2, hard_max_article_units=2, singleton_threshold_bytes=49_152)
+
+
+def test_wadoku_mode_splits_oversized_article_without_reordering_units():
+    article = _article("a-1", ["unit"] * 5)
+
+    batches = _pack_envelopes(
+        [article], {}, soft_max_articles=6, soft_max_bytes=24_576,
+        soft_max_units=2, singleton_threshold_bytes=49_152,
+        hard_max_article_bytes=49_152, hard_max_article_units=2,
+        split_oversized_articles=True,
+    )
+
+    assert [len(batch[0]["units"]) for batch in batches] == [2, 2, 1]
+    assert [
+        unit["unit_id"] for batch in batches for chunk in batch for unit in chunk["units"]
+    ] == [unit["unit_id"] for unit in article["units"]]

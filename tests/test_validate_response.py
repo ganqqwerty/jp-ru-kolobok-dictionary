@@ -4,6 +4,8 @@ import pytest
 from jitendex_ru.db import connect, initialize
 from jitendex_ru.validate_response import (
     _plain_text_issues, allows_japanese_grammar_label, ingest_response, validate_worker_payload,
+    wadoku_target_issues, wadoku_xml_block_allows_exact_source,
+    wadoku_xml_block_is_scientific,
 )
 
 
@@ -392,3 +394,160 @@ def test_approved_terminology_overrides_conflicting_protected_tokens(tmp_path):
     ]}
 
     assert validate_worker_payload(connection, attempt, payload) == []
+
+
+def test_wadoku_allows_unchanged_chemical_formula_only():
+    assert wadoku_target_issues("PbS", "PbS", []) == []
+    assert {issue["code"] for issue in wadoku_target_issues("Blei", "Blei", [])} == {
+        "no_cyrillic",
+    }
+
+
+def test_wadoku_allows_exact_scientific_names_and_compact_notation():
+    for source in (
+        "Sargassum fulvellum", "Anorexia nervosa", "CH₃COOC₅H₁₁", "(NH₄)₂S",
+        "mCi", "Tyr", "EloGM", "L", "Barnard 72",
+    ):
+        assert wadoku_target_issues(source, source, [], "u1") == []
+
+
+def test_wadoku_preserves_proper_foreign_forms_but_not_german_text():
+    for source in (
+        "Erwin Chargaff", "Tosho Shinbun", "Hōjō",
+        "Fridays for Future", "Ebi·ne",
+        "United Kingdom of Great Britain and Northern Ireland",
+    ):
+        assert wadoku_target_issues(source, source, [], "u1") == []
+    for source in ("Blei", "eine große Menge"):
+        assert "no_cyrillic" in {
+            issue["code"] for issue in wadoku_target_issues(source, source, [], "u1")
+        }
+
+
+def test_wadoku_preserves_taxonomy_latin_and_standard_ids():
+    for source in (
+        "Degeneriaceae", "Batidales", "Facies articularis carpea radii",
+        "JIS X 0201", "ISBN 4-479-", "ICD10: D58.1", "1 Oe = 79,577 A/m",
+    ):
+        assert wadoku_target_issues(source, source, [], "u1") == []
+    assert wadoku_target_issues("Tǒngzi", "Tǒngzi", [], "u1") == []
+    assert wadoku_target_issues(
+        "engl. International Convention for Human Rights",
+        "англ. International Convention for Human Rights", [], "u1",
+    ) == []
+
+
+def test_wadoku_preserves_unicode_formulas_and_neutral_normalizations():
+    for source in (
+        "²²²Rn", "i² = ‑1", "1 Ω = 1 V/A", "‑C₅H₁₁", "°C", "n+½",
+        "SiₙH₂ₙ₊₂", "Mᵤ", "§ 424 jBGB", "a:b", "b′",
+    ):
+        assert wadoku_target_issues(source, source, [], "u1") == []
+    assert wadoku_target_issues("8:30 Uhr", "8:30", [], "u1") == []
+    assert wadoku_target_issues("Nr. 113", "№ 113", [], "u1") == []
+    assert wadoku_target_issues("AT & T", "AT&T", [], "u1", allow_exact_source=True) == []
+    assert wadoku_target_issues(
+        "Sony Playstation", "Sony PlayStation", [], "u1", allow_exact_source=True,
+    ) == []
+
+
+def test_wadoku_preserves_narrow_undomained_foreign_labels():
+    for source in ("Chkdsk", "Gamescom", "gamescom", "Dir en grey", "Hypera", "… vulgaris"):
+        assert wadoku_target_issues(source, source, [], "u1") == []
+    assert "no_cyrillic" in {
+        issue["code"] for issue in wadoku_target_issues("Menge", "Menge", [], "u1")
+    }
+
+
+def test_wadoku_allows_named_foreign_terms_inside_russian_text():
+    cases = (
+        (
+            "SUMP steht für Suzuki's universal micro-printing",
+            "SUMP — сокращение от Suzuki's universal micro-printing",
+        ),
+        (
+            "von engl. non-territorial office",
+            "из англ. non-territorial office",
+        ),
+        (
+            "Betriebssystem des iPhone und iPod touch von Apple",
+            "операционная система для iPhone и iPod touch компании Apple",
+        ),
+        (
+            "Trigonometrie: sem = (versin a) / 2 = (1 − cos a) / 2",
+            "Тригонометрия: sem = (versin a) / 2 = (1 − cos a) / 2",
+        ),
+    )
+    for source, target in cases:
+        assert wadoku_target_issues(source, target, [], "u1") == []
+    assert "too_much_english" in {
+        issue["code"] for issue in wadoku_target_issues(
+            "eine deutsche Erklärung mit vielen Wörtern",
+            "перевод mit vielen deutschen Wörtern", [], "u1",
+        )
+    }
+
+
+def test_wadoku_scientific_block_uses_canonical_xml_ancestry():
+    raw = json.dumps({
+        "blocks": [{
+            "xml_path": "/entry[1]/sense[1]/trans[2]/tr[1]",
+            "source_text": "Centropus",
+        }],
+        "tree": {"tag": "entry", "attributes": {}, "children": [{
+            "tag": "sense", "attributes": {}, "children": [
+                {"tag": "trans", "attributes": {}, "children": []},
+                {"tag": "trans", "attributes": {"langdesc": "scientific"}, "children": [
+                    {"tag": "tr", "attributes": {}, "children": []},
+                ]},
+            ],
+        }]},
+    })
+    assert wadoku_xml_block_is_scientific(raw, "/blocks/0") is True
+
+
+def test_wadoku_name_domain_allows_exact_untagged_foreign_form():
+    raw = json.dumps({
+        "blocks": [{"xml_path": "/entry[1]/sense[1]/trans[1]/tr[1]"}],
+        "tree": {"tag": "entry", "attributes": {}, "children": [{
+            "tag": "sense", "attributes": {}, "children": [
+                {"tag": "usg", "attributes": {"type": "dom"}, "text": "Stadtn.", "children": []},
+                {"tag": "trans", "attributes": {}, "children": [
+                    {"tag": "tr", "attributes": {}, "children": []},
+                ]},
+            ],
+        }]},
+    })
+    assert wadoku_xml_block_allows_exact_source(raw, "/blocks/0", "Harrisburg") is True
+
+
+def test_wadoku_foreign_etymology_allows_exact_title():
+    raw = json.dumps({
+        "blocks": [{"xml_path": "/entry[1]/sense[1]/trans[1]/tr[1]"}],
+        "tree": {"tag": "entry", "attributes": {}, "children": [
+            {"tag": "etym", "attributes": {}, "text": "von engl. ", "children": [
+                {"tag": "foreign", "attributes": {}, "text": "Fridays for Future",
+                 "tail": "", "children": []},
+            ]},
+            {"tag": "sense", "attributes": {}, "children": [
+                {"tag": "trans", "attributes": {}, "children": [
+                    {"tag": "tr", "attributes": {}, "children": []},
+                ]},
+            ]},
+        ]},
+    })
+    assert wadoku_xml_block_allows_exact_source(
+        raw, "/blocks/0", "Fridays for Future",
+    ) is True
+
+
+def test_wadoku_allows_source_proper_names_in_russian_sentence():
+    source = (
+        "gegründet durch Zusammenschluss von Kensei·hontō mit Yushinkai, "
+        "Mumeikai und anderen Gruppen"
+    )
+    target = (
+        "основана в результате объединения Kensei·hontō с Yushinkai, "
+        "Mumeikai и другими группами"
+    )
+    assert wadoku_target_issues(source, target, []) == []

@@ -51,6 +51,7 @@ def main() -> int:
     parser.add_argument("--targets", type=Path)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--allow-blocked", action="store_true")
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         raise ValueError("--limit must be positive")
@@ -99,7 +100,7 @@ def main() -> int:
             if batch["state"] == "deterministic_validated":
                 already_valid += 1
                 continue
-            if batch["state"] != "ready":
+            if batch["state"] not in ({"ready", "blocked"} if args.allow_blocked else {"ready"}):
                 raise RuntimeError(f"unexpected state for {batch_id}: {batch['state']}")
 
             selected: tuple[Path, dict, set[str]] | None = None
@@ -125,6 +126,16 @@ def main() -> int:
             source_path, payload, found = selected
             used_targets.update((batch_id, unit_id) for unit_id in found)
             if not args.dry_run:
+                if batch["state"] == "blocked":
+                    connection.execute(
+                        """UPDATE batch SET state='ready',lease_token=NULL,lease_expires_at=NULL
+                        WHERE id=? AND state='blocked'""", (batch_id,),
+                    )
+                    audit(connection, "reopen_after_validator_fix", "batch", batch_id, {
+                        "source_response": str(source_path),
+                        "reason": "saved Luna response passes the revised deterministic validator",
+                    })
+                    connection.commit()
                 item = claim(
                     connection, "saved-response-recovery", config.work_dir / "outbox",
                     run_id=args.run_id, kind="translation", batch_id=batch_id,

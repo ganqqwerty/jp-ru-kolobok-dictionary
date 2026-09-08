@@ -88,6 +88,47 @@ def _article_envelope(
     evidence: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     source = json.loads(article["raw_json"])
+    if (
+        isinstance(source, dict) and source.get("schema_version") == 1
+        and source.get("namespace") == "http://www.wadoku.de/xml/entry"
+    ):
+        blocks = source.get("blocks", [])
+        grammar: list[str] = []
+
+        def collect_grammar(node: dict[str, Any], inside: bool = False) -> None:
+            active = inside or node.get("tag") == "gramGrp"
+            if inside and node.get("tag") != "gramGrp":
+                grammar.append(str(node.get("tag")))
+            for child in node.get("children", []):
+                collect_grammar(child, active)
+
+        collect_grammar(source["tree"])
+        prepared_units = []
+        for unit in units:
+            index = int(str(unit["json_pointer"]).removeprefix("/blocks/"))
+            block = blocks[index]
+            nearby = [item["source_text"] for item in blocks[max(0, index - 2):index + 3]]
+            prepared_units.append({
+                "unit_id": unit["id"], "source_sha256": unit["source_sha256"],
+                "role": unit["role"], "source_text": unit["source_text"],
+                "protected_tokens": json.loads(unit["protected_tokens_json"]),
+                "local_context": {
+                    "unit_role": block["role"], "xml_path": block["xml_path"],
+                    "sense_path": block["sense_path"], "nearby_source_blocks": nearby,
+                },
+            })
+        return {
+            "article_id": f"a-{article['id']}", "source_sha256": article["source_sha256"],
+            "term": article["expression"], "reading": article["reading"],
+            "sequence": article["sequence"],
+            "read_only_context": {
+                "dictionary": "Wadoku", "entry_id": source["entry_id"],
+                "expression": article["expression"], "reading": article["reading"],
+                "entry_grammar": list(dict.fromkeys(grammar)),
+                "preservation_rule": "Protected tokens and XML structure are immutable.",
+            },
+            "units": prepared_units,
+        }
     kanjidic = any(unit["role"] == "glossary_set" and unit["json_pointer"] == "/4" for unit in units)
     glossary_index = 4 if kanjidic else 5
     plain_glossary = (
@@ -154,6 +195,8 @@ def _uses_lexicographer(articles: list[dict[str, Any]]) -> bool:
 
 
 def _manifest_pipeline(articles: list[dict[str, Any]]) -> str:
+    if any(article.get("read_only_context", {}).get("dictionary") == "Wadoku" for article in articles):
+        return "wadoku-xml-v2"
     if any(unit["role"] == DOJG_ROLE for article in articles for unit in article["units"]):
         return "dojg-v1"
     if any(article.get("read_only_context", {}).get("dictionary") == "KANJIDIC2" for article in articles):
@@ -202,11 +245,55 @@ def _pack_envelopes(
     envelopes: list[dict[str, Any]], terminology: dict[str, str],
     soft_max_articles: int, soft_max_bytes: int, soft_max_units: int,
     singleton_threshold_bytes: int, hard_max_article_bytes: int, hard_max_article_units: int,
+    split_oversized_articles: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """Pack whole articles using soft group caps and hard article ceilings."""
+    article_sizes = {id(envelope): len(canonical_json(envelope)) for envelope in envelopes}
+    if split_oversized_articles:
+        expanded: list[dict[str, Any]] = []
+        for envelope in envelopes:
+            original_bytes = _manifest_size([envelope], terminology, article_sizes)
+            if (original_bytes <= hard_max_article_bytes
+                    and len(envelope["units"]) <= hard_max_article_units):
+                expanded.append(envelope)
+                continue
+            base = {**envelope, "units": []}
+            current_units: list[dict[str, Any]] = []
+            for unit in envelope["units"]:
+                candidate_units = [*current_units, unit]
+                candidate = {**base, "units": candidate_units}
+                _, exact = _manifest("b-" + "0" * 24, [candidate], terminology)
+                if (len(exact) > hard_max_article_bytes
+                        or len(candidate_units) > hard_max_article_units):
+                    if not current_units:
+                        raise ValueError(
+                            f"unit {unit['unit_id']} in article {envelope['article_id']} "
+                            "exceeds a hard article limit"
+                        )
+                    expanded.append({**base, "units": current_units})
+                    current_units = [unit]
+                    _, exact = _manifest(
+                        "b-" + "0" * 24, [{**base, "units": current_units}], terminology,
+                    )
+                    if len(exact) > hard_max_article_bytes:
+                        raise ValueError(
+                            f"unit {unit['unit_id']} in article {envelope['article_id']} "
+                            "exceeds a hard article limit"
+                        )
+                else:
+                    current_units = candidate_units
+            if current_units:
+                expanded.append({**base, "units": current_units})
+        envelopes = expanded
+        article_sizes = {
+            id(envelope): (
+                article_sizes[id(envelope)]
+                if id(envelope) in article_sizes else len(canonical_json(envelope))
+            )
+            for envelope in envelopes
+        }
     batches: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
-    article_sizes = {id(envelope): len(canonical_json(envelope)) for envelope in envelopes}
 
     def measured(candidate: list[dict[str, Any]]) -> tuple[int, int]:
         return _manifest_size(candidate, terminology, article_sizes), sum(
@@ -279,10 +366,15 @@ def make_batches(
     article_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     metrics = PrepMetrics("make_batches")
-    run = connection.execute("SELECT jitendex_snapshot_id FROM run WHERE id=?", (run_id,)).fetchone()
+    run = connection.execute(
+        "SELECT jitendex_snapshot_id,dictionary_snapshot_id,pipeline_version FROM run WHERE id=?",
+        (run_id,),
+    ).fetchone()
     if run is None:
         raise ValueError(f"unknown run: {run_id}")
-    tag_catalog = _approved_tag_catalog(connection, run["jitendex_snapshot_id"])
+    wadoku = run["pipeline_version"] == "wadoku-xml-v2"
+    snapshot_id = run["dictionary_snapshot_id"] or run["jitendex_snapshot_id"]
+    tag_catalog = None if wadoku else _approved_tag_catalog(connection, snapshot_id)
     grouped: dict[int, list[RowLike]] = defaultdict(list)
     with metrics.phase("ready_unit_loading") as phase:
         for unit in connection.execute(
@@ -305,7 +397,7 @@ def make_batches(
         missing = set(grouped) - set(articles)
         if missing:
             raise RuntimeError(f"missing {len(missing)} ready-unit articles")
-        evidence = _ready_evidence(connection, run_id)
+        evidence = {} if wadoku else _ready_evidence(connection, run_id)
         phase.update(output_rows=len(articles), evidence_rows=sum(map(len, evidence.values())))
     with metrics.phase("envelope_creation", input_rows=len(grouped)) as phase:
         envelopes = [
@@ -322,6 +414,7 @@ def make_batches(
             soft_max_articles, soft_max_bytes, soft_max_units, singleton_threshold_bytes,
             hard_max_article_bytes if hard_max_article_bytes is not None else soft_max_bytes,
             hard_max_article_units if hard_max_article_units is not None else soft_max_units,
+            split_oversized_articles=wadoku,
         )
         phase.update(output_rows=len(batches))
 

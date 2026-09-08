@@ -275,7 +275,9 @@ def test_postgresql_claim_recovery_replay_split_and_connection_loss(tmp_path, da
         sequence,raw_json,source_sha256,selected) VALUES (1,1,1,1,'語','ご',1,?,'article',1)""",
         (raw,),
     )
-    connection.execute("INSERT INTO run_article VALUES (1,1,'fingerprint')")
+    connection.execute(
+        "INSERT INTO run_article(run_id,article_id,structural_fingerprint) VALUES (1,1,'fingerprint')"
+    )
     connection.execute(
         """INSERT INTO translation_unit(id,run_id,article_id,json_pointer,role,source_text,
         source_sha256,protected_tokens_json,byte_count) VALUES

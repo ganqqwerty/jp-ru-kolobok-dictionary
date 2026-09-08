@@ -11,7 +11,7 @@ from typing import Iterator, Mapping
 from .database import ConnectionLike, transaction as database_transaction
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "migrations/sqlite/0008_schema.sql"

@@ -42,11 +42,12 @@ def headword_progress(connection: ConnectionLike, run_id: int) -> tuple[int, int
     """Return fully translated headwords and the complete source-headword total."""
     row = connection.execute(
         """WITH selected_run AS (
-          SELECT id AS run_id,jitendex_snapshot_id FROM run WHERE id=?
+          SELECT id AS run_id,COALESCE(dictionary_snapshot_id,jitendex_snapshot_id) dictionary_snapshot_id
+          FROM run WHERE id=?
         ), source_articles AS (
           SELECT a.id,a.expression,a.reading,sr.run_id
           FROM selected_run sr JOIN article a
-            ON a.snapshot_id=sr.jitendex_snapshot_id
+            ON a.snapshot_id=sr.dictionary_snapshot_id
         ), all_headwords AS (
           SELECT expression,reading FROM source_articles GROUP BY expression,reading
         ), incomplete_headwords AS (

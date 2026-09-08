@@ -145,6 +145,27 @@ def interrupt_claim(config: Config, item: dict[str, str], database: Database | N
         connection.close()
 
 
+def mark_attempt_dispatched(
+    config: Config, item: dict[str, str], database: Database | None = None,
+) -> None:
+    """Record the real process-launch boundary once before starting Codex."""
+    connection = _connection(config, database)
+    try:
+        with transaction(connection, immediate=True):
+            updated = connection.execute(
+                """UPDATE attempt SET dispatched_at=COALESCE(dispatched_at,CURRENT_TIMESTAMP)
+                WHERE id=? AND batch_id=? AND lease_token=? AND outcome='claimed'""",
+                (item["attempt_id"], item["batch_id"], item["lease_token"]),
+            ).rowcount
+            if updated != 1:
+                raise ValueError(f"attempt no longer owns launch lease: {item['attempt_id']}")
+            audit(connection, "dispatch", "attempt", item["attempt_id"], {
+                "batch_id": item["batch_id"], "transport": "codex-agent",
+            })
+    finally:
+        connection.close()
+
+
 def live_headword_progress(
     config: Config, run_id: int, database: Database | None = None,
 ) -> tuple[int, int]:
@@ -669,9 +690,12 @@ def main() -> int:
                     claim_unavailable = True
                     break
                 number = submitted
-                callback = lambda launched, item=item, number=number, requested_launch=requested_launch, opening_slot=opening_slot: record_launch(
-                    item, number, requested_launch, opening_slot, launched,
-                )
+                def callback(
+                    launched, item=item, number=number,
+                    requested_launch=requested_launch, opening_slot=opening_slot,
+                ):
+                    mark_attempt_dispatched(config, item, database)
+                    record_launch(item, number, requested_launch, opening_slot, launched)
                 active[executor.submit(
                     dispatch_one, item, prompt, args.kind, callback, executable,
                     args.request_timeout_seconds,
