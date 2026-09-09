@@ -846,6 +846,7 @@ def build_rich_archive(
     title: str, revision: str, source_url: str, source_sha256: str,
     export_audit_id: int | str, description_note: str | None = None,
     row_factory=None, reference_targets: dict[str, dict[str, str]] | None = None,
+    audit_label: str = "PostgreSQL export audit",
 ) -> dict[str, Any]:
     index = {
         "title": title, "revision": revision, "format": 3, "sequenced": True,
@@ -853,7 +854,7 @@ def build_rich_archive(
         "attribution": "Wadoku.de; see bundled LICENSE and https://www.wadoku.de/wiki/display/WAD/Wadoku.de-Lizenz",
         "description": (
             f"Official Wadoku source 2026-07-05; archive SHA-256 {source_sha256}; "
-            f"pipeline {WADOKU_PIPELINE}; edition {revision}; PostgreSQL export audit {export_audit_id}."
+            f"pipeline {WADOKU_PIPELINE}; edition {revision}; {audit_label} {export_audit_id}."
             + (f" {description_note}" if description_note else "")
         ),
     }

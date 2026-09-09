@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Any, Iterator, Mapping
 
 from .database import ConnectionLike, transaction as database_transaction
 
@@ -171,3 +171,79 @@ def record_attempt_cost(
         "currency": "USD",
     })
     return cost
+
+
+def create_wadoku_pilot_state(path: Path, selection: dict[str, Any]) -> None:
+    """Create the standalone pilot audit database used before PostgreSQL import."""
+    if path.exists():
+        raise ValueError(f"Refusing to overwrite pilot database: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript("""
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE run_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        CREATE TABLE example_candidate(
+          parent_id INTEGER NOT NULL,child_id INTEGER NOT NULL,relation_path TEXT NOT NULL,
+          source_sha256 TEXT NOT NULL,japanese TEXT NOT NULL,reading TEXT NOT NULL,
+          source_path TEXT,PRIMARY KEY(parent_id,child_id,relation_path));
+        CREATE TABLE example_decision(
+          parent_id INTEGER NOT NULL,child_id INTEGER NOT NULL,relation_path TEXT NOT NULL,
+          state TEXT NOT NULL CHECK(state IN ('accept','reject')),reviewer TEXT NOT NULL,
+          reason TEXT NOT NULL,PRIMARY KEY(parent_id,child_id,relation_path));
+        CREATE TABLE example_unit(
+          unit_id TEXT PRIMARY KEY,parent_id INTEGER NOT NULL,child_id INTEGER NOT NULL,
+          source_path TEXT NOT NULL,source_sha256 TEXT NOT NULL,context_sha256 TEXT NOT NULL);
+        CREATE TABLE example_translation(
+          unit_id TEXT PRIMARY KEY,target_text TEXT NOT NULL,target_sha256 TEXT NOT NULL);
+        CREATE TABLE export_audit(
+          archive_sha256 TEXT PRIMARY KEY,selection_sha256 TEXT NOT NULL,
+          candidate_count INTEGER NOT NULL,accepted_count INTEGER NOT NULL,
+          rejected_count INTEGER NOT NULL,translated_count INTEGER NOT NULL,
+          exported_count INTEGER NOT NULL,status TEXT NOT NULL);
+        """)
+        meta = {
+            "schema_version": "1", "pilot_number": str(selection["pilot_number"]),
+            "pilot_date": selection["pilot_date"],
+            "selection_sha256": selection["selection_sha256"],
+            "source_sha256": selection["source_sha256"],
+            "random_seed": selection["random_seed"],
+        }
+        connection.executemany("INSERT INTO run_meta(key,value) VALUES (?,?)", meta.items())
+        for candidate in selection["example_stage"]["candidates"]:
+            connection.execute(
+                "INSERT INTO example_candidate VALUES (?,?,?,?,?,?,?)",
+                (candidate["parent_id"], candidate["child_id"], candidate["relation_path"],
+                 candidate["source_sha256"], candidate["japanese"], candidate["reading"],
+                 candidate.get("source_path")),
+            )
+        for decision in selection["example_stage"]["decisions"]:
+            connection.execute(
+                "INSERT INTO example_decision VALUES (?,?,?,?,?,?)",
+                (decision["parent_id"], decision["child_id"], decision["relation_path"],
+                 decision["state"], decision["reviewer"], decision["reason"]),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def record_wadoku_pilot_units(path: Path, rows: list[tuple[Any, ...]]) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executemany(
+            "INSERT OR REPLACE INTO example_unit VALUES (?,?,?,?,?,?)", rows
+        )
+
+
+def record_wadoku_pilot_export(
+    path: Path,
+    translations: list[tuple[Any, ...]],
+    audit: tuple[Any, ...],
+) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executemany(
+            "INSERT OR REPLACE INTO example_translation VALUES (?,?,?)", translations
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO export_audit VALUES (?,?,?,?,?,?,?,?)", audit
+        )

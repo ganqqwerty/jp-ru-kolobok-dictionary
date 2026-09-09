@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run the 150-entry Wadoku XML quality pilot without PostgreSQL."""
+"""Build and run a standalone Wadoku XML quality pilot without PostgreSQL."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ import json
 import random
 import re
 import secrets
-import sqlite3
 import subprocess
 import tempfile
 import zipfile
@@ -21,6 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from jitendex_ru.batch import _manifest, _pack_envelopes
+from jitendex_ru.db import (
+    create_wadoku_pilot_state,
+    record_wadoku_pilot_export,
+    record_wadoku_pilot_units,
+)
 from jitendex_ru.import_kaishi import _collection_from_apkg, split_fields
 from jitendex_ru.schema_validation import validate_archive
 from jitendex_ru.util import atomic_write, canonical_json, sha256_bytes, sha256_file
@@ -38,7 +42,7 @@ from jitendex_ru.wadoku_xml import (
     sense_translation_entry,
     reference_target_index,
 )
-from jitendex_ru.wadoku_quality import pronunciation_groups
+from jitendex_ru.wadoku_quality import example_candidates, pronunciation_groups
 
 
 SOURCE = Path("work/wadoku-xml/source/wadoku-xml-20260705/wadoku.xml")
@@ -63,6 +67,55 @@ FIXED_EXPRESSIONS = {"バーン･ジョーンズ", "暴食", "三ケ日人骨"}
 GRAMMAR_EXPRESSIONS = {"の", "は", "が", "を", "に", "で", "と", "も", "へ", "か", "ね", "よ", "より"}
 PLACEHOLDER_RE = re.compile(r"⟦WDXP\d{4}⟧")
 ELLIPSIS_RE = re.compile(r"^[…~〜～]+")
+TEMPLATE_MARK_RE = re.compile(r"[…~〜～]+")
+PILOT5_QUOTAS = {
+    "kaishi": 20,
+    "proper-name": 20,
+    "grammar": 30,
+    "ellipsis": 30,
+    "fixed-sample": 20,
+    "structural-risk": 30,
+    "random-holdout": 15,
+    "usage-examples": 15,
+}
+FUNCTION_GRAMMAR = {
+    "fukujoshi", "heiritsujoshi", "jodoushi", "joshi", "kakarijoshi",
+    "setsuzokujoshi", "setsuzokushi", "setsubiji", "settouji", "shuujoshi",
+}
+
+
+def _template_lookup(value: str) -> str:
+    """Use the final fixed segment as the lookup key for an open template."""
+    segments = [item.strip() for item in TEMPLATE_MARK_RE.split(value) if item.strip()]
+    return segments[-1] if segments else ""
+
+
+def _drop_invalid_accents(node: dict[str, Any]) -> None:
+    children = node.get("children", [])
+    node["children"] = [
+        child for child in children
+        if not (child.get("tag") == "accent" and not child.get("text", "").isdigit())
+    ]
+    for child in node["children"]:
+        _drop_invalid_accents(child)
+
+
+def _transcription_resolutions(value: dict[str, Any]) -> dict[str, str]:
+    resolutions = {"no": "の", "da": "だ", "i": "い", "zuari": "ずあり", "zu": "ず", "ari": "あり"}
+    for reference in [*_tree_descendants(value["tree"], "ref"),
+                      *_tree_descendants(value["tree"], "sref")]:
+        japanese = [_plain_tree(node) for node in _tree_descendants(reference, "jap")]
+        if not japanese:
+            continue
+        for node in _tree_descendants(reference, "transcr"):
+            resolutions[_plain_tree(node)] = japanese[0]
+    unresolved = {
+        _plain_tree(node) for node in _tree_descendants(value["tree"], "transcr")
+        if _plain_tree(node) not in resolutions
+    }
+    if unresolved:
+        raise ValueError(f"entry {value['entry_id']} has unresolved transcriptions: {sorted(unresolved)}")
+    return resolutions
 
 
 def _kaishi_notes(path: Path) -> list[dict[str, str]]:
@@ -228,6 +281,212 @@ def select(
     return payload
 
 
+def _reservoir_add(
+    rng: random.Random,
+    reservoir: list[tuple[int, dict[str, Any], dict[str, str] | None]],
+    seen: int,
+    item: tuple[int, dict[str, Any], dict[str, str] | None],
+    limit: int = 1200,
+) -> None:
+    if len(reservoir) < limit:
+        reservoir.append(item)
+        return
+    replacement = rng.randrange(seen)
+    if replacement < limit:
+        reservoir[replacement] = item
+
+
+def _example_unit(parent_id: int, example: dict[str, Any]) -> dict[str, Any]:
+    block = example["source_block"]
+    identity = sha256_bytes(canonical_json([
+        "wadoku-example-v1", parent_id, example["child_id"], example["relation_path"],
+        block["xml_path"], block["prompt_text"],
+    ]))
+    return {
+        "unit_id": f"wdxe-{identity[:32]}",
+        "source_sha256": sha256_bytes(block["prompt_text"].encode()),
+        "context_sha256": sha256_bytes(canonical_json({
+            "parent_id": parent_id, "child_id": example["child_id"],
+            "japanese": example["japanese"], "reading": example["reading"],
+            "relation_path": example["relation_path"], "source_path": block["xml_path"],
+        })),
+        "role": "example_translation",
+        "source_text": block["prompt_text"],
+        "protected_tokens": [item["placeholder"] for item in block["protected_fragments"]],
+        "protected_fragment_context": [
+            {"token": item["placeholder"], "tree": item["tree"]}
+            for item in block["protected_fragments"]
+        ],
+        "local_context": {
+            "unit_role": "example_translation", "parent_id": parent_id,
+            "child_id": example["child_id"], "japanese": example["japanese"],
+            "reading": example["reading"], "relation_path": example["relation_path"],
+            "source_path": block["xml_path"],
+        },
+    }
+
+
+def select_stratified(
+    source: Path,
+    kaishi: Path,
+    output: Path,
+    *,
+    seed: int,
+    excluded_entry_ids: set[int],
+    pilot_number: int,
+    pilot_date: str,
+) -> dict[str, Any]:
+    notes = _kaishi_notes(kaishi)
+    note_by_key = {(item["word"], reading): item for item in notes
+                   for reading in re.split(r"[・･/]", item["reading"])}
+    example_parent_ids: set[int] = set()
+    for _ordinal, value in iter_canonical_entries(source):
+        for node in _tree_descendants(value["tree"], "ref"):
+            attrs = node["attributes"]
+            if attrs.get("type") == "main" and attrs.get("subentrytype") == "VwBsp":
+                example_parent_ids.add(int(attrs["id"]))
+
+    rng = random.Random(seed)
+    buckets: dict[str, list[tuple[int, dict[str, Any], dict[str, str] | None]]] = {
+        key: [] for key in PILOT5_QUOTAS
+    }
+    seen = {key: 0 for key in PILOT5_QUOTAS}
+    complex_heap: list[tuple[int, str, int, dict[str, Any], dict[str, str] | None]] = []
+    for ordinal, value in iter_canonical_entries(source):
+        expression, reading, entry_id = canonical_identity(value)
+        if entry_id in excluded_entry_ids:
+            continue
+        size = len(canonical_json(value))
+        translatable = sum(block["has_translatable_text"] for block in value["blocks"])
+        if not 1 <= translatable <= 80 or size > 45_000:
+            continue
+        forms = _forms(value)
+        grammar = set(_grammar(value))
+        usage = _usage(value)
+        note = next((note_by_key[(form, reading)] for form in forms
+                     if (form, reading) in note_by_key), None)
+        matches: list[tuple[str, dict[str, str] | None]] = [("random-holdout", None)]
+        if note is not None and expression not in GRAMMAR_EXPRESSIONS:
+            matches.append(("kaishi", note))
+        if any("Persönlichk." in item or "geogr. Name" in item for item in usage):
+            matches.append(("proper-name", None))
+        if grammar & FUNCTION_GRAMMAR or expression in GRAMMAR_EXPRESSIONS:
+            matches.append(("grammar", None))
+        if any(ELLIPSIS_RE.match(form) for form in forms):
+            matches.append(("ellipsis", None))
+        features = _feature_tags(value)
+        if len(features) >= 2:
+            matches.append(("structural-risk", None))
+        if entry_id in example_parent_ids and "multiple-accents" not in features:
+            matches.append(("usage-examples", None))
+        for category, evidence in matches:
+            seen[category] += 1
+            _reservoir_add(rng, buckets[category], seen[category], (ordinal, value, evidence))
+        complexity = len(value["blocks"]) * 10 + len(features) * 25 + min(size // 1000, 40)
+        item = (complexity, hashlib.sha256(f"{seed}:{entry_id}".encode()).hexdigest(),
+                ordinal, value, None)
+        if len(complex_heap) < 500:
+            heapq.heappush(complex_heap, item)
+        elif item[:2] > complex_heap[0][:2]:
+            heapq.heapreplace(complex_heap, item)
+    buckets["fixed-sample"] = [(o, v, n) for _s, _t, o, v, n in sorted(complex_heap, reverse=True)]
+    for values in buckets.values():
+        rng.shuffle(values)
+
+    chosen: dict[int, tuple[int, dict[str, Any], str, dict[str, str] | None]] = {}
+    category_order = [
+        "kaishi", "proper-name", "grammar", "ellipsis", "fixed-sample",
+        "structural-risk", "random-holdout", "usage-examples",
+    ]
+    for category in category_order:
+        added = 0
+        for ordinal, value, evidence in buckets[category]:
+            if value["entry_id"] in chosen:
+                continue
+            chosen[value["entry_id"]] = (ordinal, value, category, evidence)
+            added += 1
+            if added == PILOT5_QUOTAS[category]:
+                break
+        if added != PILOT5_QUOTAS[category]:
+            raise ValueError(f"pilot category {category} has {added}, expected {PILOT5_QUOTAS[category]}")
+
+    example_parent_selection = {entry_id for entry_id, (_o, _v, category, _n) in chosen.items()
+                                if category == "usage-examples"}
+    candidates = example_candidates(
+        (value for _ordinal, value in iter_canonical_entries(source)), example_parent_selection
+    )
+    compact_candidates: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    accepted_by_parent: dict[int, list[dict[str, Any]]] = {}
+    accepted_texts: dict[int, set[tuple[str, str]]] = {}
+    for candidate in candidates:
+        blocks = [block for block in candidate["source_blocks"]
+                  if block["has_translatable_text"] and block["role"] in {"translation", "definition"}]
+        eligible = [block for block in blocks if not block["protected_fragments"]]
+        duplicate = (candidate["japanese"], candidate["reading"]) in accepted_texts.setdefault(candidate["parent_id"], set())
+        accepted = accepted_by_parent.setdefault(candidate["parent_id"], [])
+        state = "accept" if eligible and not candidate["template"] and not duplicate and len(accepted) < 3 else "reject"
+        if state == "accept":
+            block = eligible[0]
+            record = {
+                "parent_id": candidate["parent_id"], "child_id": candidate["child_id"],
+                "relation_path": candidate["relation_path"], "source_sha256": candidate["source_sha256"],
+                "japanese": candidate["japanese"], "reading": candidate["reading"],
+                "source_path": block["xml_path"], "source_block": block,
+            }
+            accepted.append(record)
+            accepted_texts[candidate["parent_id"]].add((candidate["japanese"], candidate["reading"]))
+            reason = "complete non-template example selected within the three-example limit"
+        else:
+            record = {
+                "parent_id": candidate["parent_id"], "child_id": candidate["child_id"],
+                "relation_path": candidate["relation_path"], "source_sha256": candidate["source_sha256"],
+                "japanese": candidate["japanese"], "reading": candidate["reading"], "source_path": None,
+            }
+            if candidate["template"]:
+                reason = "template example needs separate expansion review"
+            elif not eligible:
+                reason = "no single unprotected learner-facing translation block"
+            elif duplicate:
+                reason = "duplicate Japanese example"
+            else:
+                reason = "three-example display limit"
+        compact_candidates.append(record)
+        decisions.append({
+            "parent_id": candidate["parent_id"], "child_id": candidate["child_id"],
+            "relation_path": candidate["relation_path"], "state": state,
+            "reviewer": f"pilot-{pilot_number}-orchestrator", "reason": reason,
+        })
+    if set(accepted_by_parent) != example_parent_selection or any(not v for v in accepted_by_parent.values()):
+        missing = sorted(example_parent_selection - {key for key, value in accepted_by_parent.items() if value})
+        raise ValueError(f"selected example parents lack accepted examples: {missing}")
+
+    records = []
+    for entry_id, (ordinal, value, category, note) in sorted(chosen.items(), key=lambda item: item[1][0]):
+        record = _selection_record(ordinal, value, [category], note)
+        record["forms"] = _forms(value)
+        record["accepted_examples"] = accepted_by_parent.get(entry_id, [])
+        records.append(record)
+    example_stage = {
+        "candidate_count": len(compact_candidates),
+        "accepted_count": sum(decision["state"] == "accept" for decision in decisions),
+        "rejected_count": sum(decision["state"] == "reject" for decision in decisions),
+        "unresolved_count": 0, "candidates": compact_candidates, "decisions": decisions,
+    }
+    selection_hash_input = {"entries": records, "example_stage": example_stage}
+    payload = {
+        "schema_version": 3, "selection_method": "stratified-random-v1",
+        "pilot_number": pilot_number, "pilot_date": pilot_date, "random_seed": str(seed),
+        "excluded_entry_count": len(excluded_entry_ids), "source_sha256": sha256_file(source),
+        "entries": records, "entry_count": len(records), "category_counts": PILOT5_QUOTAS,
+        "example_stage": example_stage,
+        "selection_sha256": sha256_bytes(canonical_json(selection_hash_input)),
+    }
+    atomic_write(output, canonical_json(payload) + b"\n")
+    create_wadoku_pilot_state(output.parent / "pilot-state.sqlite3", payload)
+    return payload
+
+
 def select_legacy(source: Path, kaishi: Path, output: Path) -> dict[str, Any]:
     """Preserve the fixed pilot-selection implementation for old run provenance."""
     notes = _kaishi_notes(kaishi)
@@ -357,8 +616,10 @@ def _selected_entries(source: Path, selection: dict[str, Any]) -> list[tuple[dic
             if sha256_bytes(canonical_json(value)) != record["source_sha256"]:
                 raise ValueError("selected source changed")
             result.append((sense_translation_entry(value), record))
-    if len(result) != 150:
-        raise ValueError(f"loaded {len(result)} selected entries")
+    if len(result) != selection["entry_count"]:
+        raise ValueError(
+            f"loaded {len(result)} selected entries, expected {selection['entry_count']}"
+        )
     return result
 
 
@@ -386,6 +647,7 @@ def _envelope(value: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
                 "nearby_source_blocks": [item["source_text"] for item in blocks[max(0, index - 2):index + 3]],
             },
         })
+    units.extend(_example_unit(sequence, example) for example in record.get("accepted_examples", []))
     return {
         "article_id": f"wdx-{sequence}", "source_sha256": record["source_sha256"],
         "term": expression, "reading": reading, "sequence": sequence,
@@ -428,6 +690,15 @@ def prepare_batches(source: Path, selection_path: Path, batch_dir: Path) -> dict
     report = {"batch_count": len(batches), "batches": batches,
               "articles": len(active), "units": sum(item["units"] for item in batches)}
     atomic_write(batch_dir.parent / "batch-report.json", canonical_json(report) + b"\n")
+    state_db = selection_path.parent / "pilot-state.sqlite3"
+    if state_db.is_file():
+        rows = []
+        for record in selection["entries"]:
+            for example in record.get("accepted_examples", []):
+                unit = _example_unit(record["entry_id"], example)
+                rows.append((unit["unit_id"], record["entry_id"], example["child_id"],
+                             example["source_path"], unit["source_sha256"], unit["context_sha256"]))
+        record_wadoku_pilot_units(state_db, rows)
     return report
 
 
@@ -529,28 +800,80 @@ def _validated_targets(batch_dir: Path, response_dir: Path) -> tuple[dict[str, A
     return targets, issues
 
 
-def _pilot_rows(value: dict[str, Any], labels: dict[tuple[str, str], dict[str, Any]], targets: dict[int, str]):
+def _pilot_rows(
+    value: dict[str, Any],
+    labels: dict[tuple[str, str], dict[str, Any]],
+    targets: dict[int, str],
+    examples: list[dict[str, str]],
+):
     pilot_value = value
     _expression, reading, _sequence = canonical_identity(value)
     pilot_limitations: list[dict[str, Any]] = []
-    if ELLIPSIS_RE.match(reading):
+    if TEMPLATE_MARK_RE.search(reading):
         pilot_value = copy.deepcopy(value)
         for node in _tree_descendants(pilot_value["tree"], "hira"):
-            node["text"] = ELLIPSIS_RE.sub("", node["text"])
+            node["text"] = _template_lookup(node["text"])
+        for node in _tree_descendants(pilot_value["tree"], "hatsuon"):
+            node["text"] = _template_lookup(node["text"])
         pilot_limitations.append({
             "code": "template_reading_normalized_for_suffix_lookup",
             "source_reading": reading,
-            "lookup_reading": ELLIPSIS_RE.sub("", reading),
+            "lookup_reading": _template_lookup(reading),
         })
     pronunciation = pronunciation_groups(pilot_value)
+    if pronunciation["issues"] and all(
+        item["code"] == "invalid_accent" for item in pronunciation["issues"]
+    ):
+        if pilot_value is value:
+            pilot_value = copy.deepcopy(value)
+        pilot_limitations.extend({"code": "source_invalid_accent_omitted", **item}
+                                  for item in pronunciation["issues"])
+        _drop_invalid_accents(pilot_value["tree"])
+        pronunciation = pronunciation_groups(pilot_value)
+    if pronunciation["issues"]:
+        raise ValueError(f"entry {value['entry_id']} has unresolved pronunciation: {pronunciation['issues']}")
     rows, metadata = yomitan_rows(pilot_value, "ru", labels, targets)
+    if examples:
+        example_content = []
+        for example in examples:
+            japanese: dict[str, Any] = {
+                "tag": "span", "lang": "ja", "data": {"content": "example-sentence-a"},
+                "content": example["japanese"],
+            }
+            if example["reading"] and example["reading"] != example["japanese"]:
+                japanese["content"] = [example["japanese"], f"【{example['reading']}】"]
+            example_content.append({
+                "tag": "li", "content": [japanese, {
+                    "tag": "span", "lang": "ru", "data": {"content": "example-sentence-b"},
+                    "content": f" — {example['target_text']}",
+                }],
+            })
+        example_section = {
+            "tag": "div", "data": {"content": "examples"},
+            "content": [{"tag": "ul", "content": example_content}],
+        }
+        seen_glossaries: set[int] = set()
+        for row in rows:
+            glossary = row[5]
+            if id(glossary) in seen_glossaries:
+                continue
+            seen_glossaries.add(id(glossary))
+            if (not isinstance(glossary, list) or not glossary
+                    or not isinstance(glossary[0], dict)
+                    or glossary[0].get("type") != "structured-content"):
+                raise ValueError(f"entry {value['entry_id']} lacks structured glossary")
+            root = glossary[0]["content"]
+            content = root.get("content")
+            if not isinstance(content, list):
+                root["content"] = [content]
+            root["content"].append(copy.deepcopy(example_section))
     clean_rows = []
     aliases = []
     for row in rows:
         expression, reading = row[0], row[1]
-        if ELLIPSIS_RE.match(expression):
-            expression = ELLIPSIS_RE.sub("", expression)
-            reading = ELLIPSIS_RE.sub("", reading)
+        if TEMPLATE_MARK_RE.search(expression):
+            expression = _template_lookup(expression)
+            reading = _template_lookup(reading)
             aliases.append(expression)
         if any(mark in expression or mark in reading for mark in "…~〜～"):
             continue
@@ -607,18 +930,35 @@ def export(
         raise ValueError(f"translation validation found {len(issues)} issues")
     labels = label_catalog(LABELS)
     reference_targets = reference_target_index(source)
+    for target in reference_targets.values():
+        if TEMPLATE_MARK_RE.search(target.get("expression", "")):
+            target["expression"] = _template_lookup(target["expression"])
+        if TEMPLATE_MARK_RE.search(target.get("reading", "")):
+            target["reading"] = _template_lookup(target["reading"])
     prepared = []
     aliases: dict[str, list[str]] = {}
     pronunciation_limitations: list[dict[str, Any]] = []
-    for value, _record in _selected_entries(source, selection):
-        value = {**value, "reference_targets": reference_targets}
+    accepted_example_count = 0
+    for value, record in _selected_entries(source, selection):
+        value = {
+            **value, "reference_targets": reference_targets,
+            "transcription_resolutions": _transcription_resolutions(value),
+        }
         block_targets = {}
         for index, block in enumerate(value["blocks"]):
             if block["has_translatable_text"]:
                 unit_id = translation_unit_id(WADOKU_ARCHIVE_SHA256, value["entry_id"], block)
                 block_targets[index] = unit_targets[unit_id]
+        examples = []
+        for example in record.get("accepted_examples", []):
+            unit = _example_unit(value["entry_id"], example)
+            examples.append({
+                "japanese": example["japanese"], "reading": example["reading"],
+                "target_text": unit_targets[unit["unit_id"]],
+            })
+        accepted_example_count += len(examples)
         rows, metadata, entry_aliases, entry_pronunciation_limitations = _pilot_rows(
-            value, labels, block_targets
+            value, labels, block_targets, examples
         )
         aliases[str(value["entry_id"])] = entry_aliases
         pronunciation_limitations.extend({"entry_id": value["entry_id"], **item}
@@ -634,10 +974,13 @@ def export(
     report = build_rich_archive(
         entries(), output, language="ru", labels=labels, license_text=LICENSE.read_bytes(),
         title=f"Wadoku RU · пилот {pilot_number} · {pilot_date}",
-        revision=f"{pilot_date.replace('-', '.')}-wadoku-rich-ru-pilot{pilot_number}-random150-v4",
+        revision=(f"{pilot_date.replace('-', '.')}-wadoku-rich-ru-pilot{pilot_number}-"
+                  f"{selection['selection_method']}-{selection['entry_count']}-v4-examples-v1"),
         source_url="https://www.wadoku.de/", source_sha256=WADOKU_ARCHIVE_SHA256,
         export_audit_id=f"standalone-pilot-{pilot_number}",
-        description_note=f"Пилот {pilot_number} от {pilot_date}: новая случайная выборка из 150 статей.",
+        audit_label="standalone SQLite export audit",
+        description_note=(f"Пилот {pilot_number} от {pilot_date}: новая выборка из "
+                          f"{selection['entry_count']} статей; примеров: {accepted_example_count}."),
         row_factory=lambda value, *_args: rows_by_id[value["entry_id"]],
     )
     schema = validate_archive(output, SCHEMA_DIR)
@@ -645,8 +988,58 @@ def export(
         term_rows = [row for name in archive.namelist() if name.startswith("term_bank_")
                      for row in json.loads(archive.read(name))]
     literal_templates = sum(any(mark in row[0] or mark in row[1] for mark in "…~〜～") for row in term_rows)
-    if report["entries"] != 150 or literal_templates:
-        raise ValueError(f"pilot export gate failed: entries={report['entries']} templates={literal_templates}")
+    def visible_strings(node: Any) -> list[str]:
+        if isinstance(node, str):
+            return [node]
+        if isinstance(node, list):
+            return [text for item in node for text in visible_strings(item)]
+        if isinstance(node, dict):
+            return visible_strings(node.get("content", []))
+        return []
+
+    row_text_by_entry: dict[int, set[str]] = {}
+    for row in term_rows:
+        row_text_by_entry.setdefault(row[6], set()).update(visible_strings(row[5]))
+    exported_examples = 0
+    for record in selection["entries"]:
+        texts = row_text_by_entry.get(record["entry_id"], set())
+        for example in record.get("accepted_examples", []):
+            unit = _example_unit(record["entry_id"], example)
+            target = unit_targets[unit["unit_id"]]
+            if (example["japanese"] in texts
+                    and any(text.removeprefix(" — ") == target for text in texts)):
+                exported_examples += 1
+    if (report["entries"] != selection["entry_count"] or literal_templates
+            or exported_examples != accepted_example_count):
+        raise ValueError(
+            f"pilot export gate failed: entries={report['entries']} templates={literal_templates} "
+            f"examples={exported_examples}/{accepted_example_count}"
+        )
+    state_db = selection_path.parent / "pilot-state.sqlite3"
+    formal_audit = {
+        "candidate_count": selection.get("example_stage", {}).get("candidate_count", 0),
+        "accepted_count": accepted_example_count,
+        "rejected_count": selection.get("example_stage", {}).get("rejected_count", 0),
+        "unresolved_count": selection.get("example_stage", {}).get("unresolved_count", 0),
+        "translated_count": accepted_example_count,
+        "exported_count": exported_examples,
+        "status": "pass",
+    }
+    if state_db.is_file():
+        translations = []
+        for record in selection["entries"]:
+            for example in record.get("accepted_examples", []):
+                unit = _example_unit(record["entry_id"], example)
+                target = unit_targets[unit["unit_id"]]
+                translations.append((unit["unit_id"], target, sha256_bytes(target.encode())))
+        audit = (
+            sha256_file(output), selection["selection_sha256"],
+            formal_audit["candidate_count"], formal_audit["accepted_count"],
+            formal_audit["rejected_count"], formal_audit["translated_count"],
+            formal_audit["exported_count"], formal_audit["status"],
+        )
+        record_wadoku_pilot_export(state_db, translations, audit)
+    atomic_write(output.parent / "formal-example-audit.json", canonical_json(formal_audit) + b"\n")
     run_report = json.loads((response_dir.parent / "translation-run.json").read_text(encoding="utf-8"))
     batch_report = json.loads((batch_dir.parent / "batch-report.json").read_text(encoding="utf-8"))
     usage_rows = [item.get("usage", {}) for item in run_report["results"]]
@@ -667,6 +1060,7 @@ def export(
         "editorial_corrections": editorial_corrections,
         "pronunciation_limitations": pronunciation_limitations,
         "category_counts": selection["category_counts"],
+        "formal_example_audit": formal_audit,
         "translation": {
             "model": run_report["model"], "concurrency": run_report["concurrency"],
             "requests": len(run_report["results"]), "units": batch_report["units"],
@@ -702,13 +1096,17 @@ def build_site(
         "grammar": "Грамматика и служебные слова", "ellipsis": "Шаблоны и суффиксный поиск",
         "fixed-sample": "Фиксированные сложные примеры", "structural-risk": "Структурные риски",
         "random-holdout": "Случайная контрольная группа",
+        "usage-examples": "Слова с примерами употребления",
         "random-corpus": "Случайная выборка из корпуса",
         "random-structural-risk": "Случайная выборка сложных структур",
     }
     sections = []
     for key in labels:
         entries = by_category.get(key, [])
-        words = html.escape("　".join(entry["expression"].lstrip("…~〜～") for entry in entries))
+        words = html.escape("　".join(
+            "／".join(entry.get("forms") or [entry["expression"]]).lstrip("…~〜～")
+            for entry in entries
+        ))
         sections.append(f'<section><h2>{labels[key]} <small>{len(entries)}</small></h2><p class="scan" lang="ja">{words}</p></section>')
     sentences = [re.sub(r'<[^>]+>', '', entry['kaishi_evidence']['sentence_ja'])
                  for entry in selection['entries'] if entry.get('kaishi_evidence')]
@@ -734,12 +1132,16 @@ def build_site(
         unique.setdefault(row[6], row)
     featured = [627246, 4797765, 1823533, 2849163, 202992, 10084606]
     review_rows = sorted(unique.values(), key=lambda row: (row[6] not in featured, row[6]))
-    sections.insert(0, '<section><h2>Предпросмотр всех 150 статей</h2><p>Текст взят из нового ZIP. Настоящий вид всплывающего окна проверьте в Yomitan.</p>' + ''.join(
+    form_rows = sorted({(row[0], row[1], "、".join(row[3])) for row in rows})
+    sections.append('<section><h2>Все поисковые формы и правила словоформ</h2><p>Здесь есть кандзи, кана, варианты написания и правила склонения или спряжения из ZIP.</p>' + ''.join(
+        f'<p class="form"><span lang="ja">{html.escape(term)}</span> · {html.escape(reading)} · {html.escape(rules or "без правил словоформ")}</p>'
+        for term, reading, rules in form_rows) + '</section>')
+    sections.insert(0, f'<section><h2>Предпросмотр всех {selection["entry_count"]} статей</h2><p>Текст взят из нового ZIP. Настоящий вид всплывающего окна проверьте в Yomitan.</p>' + ''.join(
         '<details' + (' open' if row[6] in featured else '') + f'><summary><span lang="ja">{html.escape(row[0])}</span> · {html.escape(row[1])} · {html.escape(row[2])}</summary>'
         + render_preview(row[5]) + '</details>' for row in review_rows) + '</section>')
     page_html = f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Wadoku pilot {pilot_number} — Yomitan test</title><style>
 body{{font:17px/1.55 system-ui,sans-serif;max-width:1050px;margin:auto;padding:32px;color:#18202a;background:#f5f7fa}}header,section{{background:white;border:1px solid #d9e0e8;border-radius:14px;padding:20px;margin:16px 0}}h1{{margin-top:0}}h2{{font-size:1.15rem}}small{{color:#637083}}.scan{{font-size:1.55rem;line-height:2.2;word-break:keep-all}}a.button{{display:inline-block;background:#1769e0;color:white;padding:10px 16px;border-radius:9px;text-decoration:none}}code{{background:#edf1f5;padding:2px 5px}}</style></head><body>
-<header><h1>Wadoku: пилот {pilot_number} · {pilot_date} · 150 новых статей</h1><p><a class="button" href="{archive.name}">Скачать Yomitan ZIP</a></p><p>Отключите старый пилот и импортируйте новый ZIP в Yomitan. Затем наведите курсор на слова ниже с зажатой клавишей Yomitan.</p><p>Проверяйте перевод, разделение значений, формы, чтение, ударение, пометы, ссылки и примеры.</p></header>
+<header><h1>Wadoku: пилот {pilot_number} · {pilot_date} · {selection['entry_count']} новых статей</h1><p><a class="button" href="{archive.name}">Скачать Yomitan ZIP</a></p><p>Отключите старый пилот и импортируйте новый ZIP в Yomitan. Затем наведите курсор на слова ниже с зажатой клавишей Yomitan.</p><p>Проверяйте перевод, разделение значений, все формы, чтение, словоформы, ударение, пометы, ссылки и примеры.</p></header>
 {''.join(sections)}
 </body></html>'''
     (static_dir / "index.html").write_text(page_html, encoding="utf-8")
@@ -761,6 +1163,7 @@ def main() -> int:
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--exclude-selection", type=Path, action="append", default=[])
     parser.add_argument("--editorial", type=Path)
+    parser.add_argument("--selection-profile", choices=("random", "stratified"), default="random")
     args = parser.parse_args()
     selection_path = args.selection or args.work_dir / "pilot-selection.json"
     batch_dir = args.work_dir / "batches"
@@ -778,11 +1181,14 @@ def main() -> int:
                 for path in exclude_paths if path.is_file()
                 for entry in json.loads(path.read_text(encoding="utf-8"))["entries"]
             }
-            result["selection"] = select(
-                SOURCE, KAISHI, selection_path,
-                seed=args.seed if args.seed is not None else secrets.randbits(128),
-                excluded_entry_ids=excluded_entry_ids,
-            )
+            selector = select_stratified if args.selection_profile == "stratified" else select
+            selector_args = {
+                "seed": args.seed if args.seed is not None else secrets.randbits(128),
+                "excluded_entry_ids": excluded_entry_ids,
+            }
+            if args.selection_profile == "stratified":
+                selector_args.update(pilot_number=args.pilot_number, pilot_date=args.pilot_date)
+            result["selection"] = selector(SOURCE, KAISHI, selection_path, **selector_args)
     if args.command in {"prepare", "all"}:
         result["batches"] = prepare_batches(SOURCE, selection_path, batch_dir)
     if args.command in {"translate", "all"}:
