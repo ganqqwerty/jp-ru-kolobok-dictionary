@@ -18,6 +18,8 @@ QUALITY_VERSION = "wadoku-quality-v1"
 PROJECTION_VERSION = "wadoku-sense-context-v1"
 ISSUE_IDS = tuple(f"WPM-P{i:02}" for i in range(1, 31))
 TEMPLATE_RE = re.compile(r"[…~〜～]")
+HATSUON_MARKER_RE = re.compile(r"\[([A-Za-z]+)\]")
+KNOWN_HATSUON_MARKERS = frozenset({"Dev", "Gr", "Jo", "NN", "Akz", "WaSep"})
 
 
 def tree_paths(tree: dict[str, Any], path: str = "/entry[1]"):
@@ -54,8 +56,14 @@ def parse_devoicing(hatsuon: str, reading: str) -> list[int]:
     """Accept only source notation that aligns completely; never guess a mora."""
     if "[Dev]" not in hatsuon:
         return []
+    unknown = set(HATSUON_MARKER_RE.findall(hatsuon)) - KNOWN_HATSUON_MARKERS
+    if unknown:
+        raise ValueError(f"unknown pronunciation marker: {sorted(unknown)}")
     segments = hatsuon.split("[Dev]")
-    cleaned = [re.sub(r"[\s'’~·･・<>]", "", s) for s in segments]
+    cleaned = [
+        re.sub(r"[\s'’~·･・<>]", "", HATSUON_MARKER_RE.sub("", segment))
+        for segment in segments
+    ]
     expected = morae(reading)
     if morae("".join(cleaned)) != expected:
         raise ValueError("devoicing notation does not align with the exact reading")
@@ -76,7 +84,7 @@ def pronunciation_records(value: dict[str, Any]) -> dict[str, Any]:
     form = next(c for c in value["tree"]["children"] if c["tag"] == "form")
     nodes = list(tree_paths(form, "/entry[1]/form[1]"))
     reading = next(plain(n) for n, _ in nodes if n["tag"] == "hira")
-    accents, issues = [], []
+    accents, issues, limitations = [], [], []
     seen = set()
     try:
         length = len(morae(reading))
@@ -84,9 +92,18 @@ def pronunciation_records(value: dict[str, Any]) -> dict[str, Any]:
         length = None
     devoice: list[int] = []
     for node, path in nodes:
-        if node["tag"] == "hatsuon" and "[Dev]" in plain(node):
+        if node["tag"] != "hatsuon":
+            continue
+        notation = plain(node)
+        for marker in sorted(set(HATSUON_MARKER_RE.findall(notation)) - {"Dev"}):
+            limitations.append({
+                "code": "retained_source_only_hatsuon_marker",
+                "path": path,
+                "marker": marker,
+            })
+        if "[Dev]" in notation:
             try:
-                devoice = parse_devoicing(plain(node), reading)
+                devoice = parse_devoicing(notation, reading)
             except ValueError as error:
                 issues.append({"code": "unresolved_devoicing", "path": path, "reason": str(error)})
     for node, path in tree_paths(value["tree"]):
@@ -114,9 +131,14 @@ def pronunciation_records(value: dict[str, Any]) -> dict[str, Any]:
             pitch["devoice"] = devoice
         accents.append({"scope": scope, "path": path, "source_value": raw, "pitch": pitch})
     if devoice and not accents:
-        issues.append({"code": "devoicing_without_pitch", "path": "/entry[1]/form[1]"})
+        limitations.append({
+            "code": "devoicing_without_pitch",
+            "path": "/entry[1]/form[1]",
+            "devoice": devoice,
+        })
     return {"version": QUALITY_VERSION, "entry_id": value["entry_id"],
-            "reading": reading, "accents": accents, "issues": issues}
+            "reading": reading, "accents": accents, "issues": issues,
+            "limitations": limitations}
 
 
 def usage_codes(node: dict[str, Any]) -> list[str]:
@@ -138,7 +160,8 @@ def pronunciation_groups(value: dict[str, Any]) -> dict[str, Any]:
     """
     parsed = pronunciation_records(value)
     if parsed["issues"]:
-        return {"groups": [], "issues": parsed["issues"]}
+        return {"groups": [], "issues": parsed["issues"],
+                "limitations": parsed["limitations"]}
     senses = [n for n in value["tree"]["children"] if n["tag"] == "sense"]
     general = {r["pitch"]["position"] for r in parsed["accents"] if r["scope"] == "entry"}
     restricted: dict[int, set[int]] = {}
@@ -147,7 +170,8 @@ def pronunciation_groups(value: dict[str, Any]) -> dict[str, Any]:
             restricted.setdefault(int(record["scope"].split(":")[1]), set()).add(record["pitch"]["position"])
     if not restricted:
         return {"groups": [{"sense_indices": list(range(1, len(senses) + 1)),
-                            "pitches": [r["pitch"] for r in parsed["accents"]]}], "issues": []}
+                            "pitches": [r["pitch"] for r in parsed["accents"]]}], "issues": [],
+                "limitations": parsed["limitations"]}
     membership: dict[int, list[int]] = {}
     issues = []
     for index in range(1, len(senses) + 1):
@@ -159,14 +183,15 @@ def pronunciation_groups(value: dict[str, Any]) -> dict[str, Any]:
     for orphan in general - membership.keys():
         issues.append({"code": "pitch_without_assigned_sense", "position": orphan})
     if issues:
-        return {"groups": [], "issues": issues}
+        return {"groups": [], "issues": issues, "limitations": parsed["limitations"]}
     by_senses: dict[tuple[int, ...], list[dict[str, Any]]] = {}
     for position, indices in sorted(membership.items()):
         prototype = next(r["pitch"] for r in parsed["accents"] if r["pitch"]["position"] == position)
         pitch = {k: copy.deepcopy(v) for k, v in prototype.items() if k != "tags"}
         by_senses.setdefault(tuple(indices), []).append(pitch)
     return {"groups": [{"sense_indices": list(indices), "pitches": pitches}
-                        for indices, pitches in by_senses.items()], "issues": []}
+                        for indices, pitches in by_senses.items()], "issues": [],
+            "limitations": parsed["limitations"]}
 
 
 def pitch_group_sequence(entry_id: int, sense_indices: list[int]) -> int:

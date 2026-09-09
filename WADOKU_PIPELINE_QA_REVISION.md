@@ -56,6 +56,32 @@ WPQ-C-4 — Pair the immutable Japanese example with a translated learner-facing
 
 WPQ-C-5 — Export pairs in verified structured-content example containers, with Japanese and Russian language roles separate from the glossary. Do not invent unsupported top-level Yomitan fields. Require pair completeness, provenance, no duplicate attachment, and no silent example loss. Count selected example units separately in budgets and coverage. Covers WPM-P12/P13/P14/P23.
 
+## WPQ-FORMAL — Formal example-export gate for the orchestrator
+
+WPQ-FORMAL-1 — The orchestrator must run this gate before it reports a pilot export as complete, publishes a review site, or asks for pilot approval. A valid Yomitan schema is not enough. The gate reads the frozen pilot selection, the complete reverse `main/VwBsp` candidate inventory, reviewed example decisions, translation manifests, accepted example translations and the built ZIP.
+
+WPQ-FORMAL-2 — Require one reviewed decision for every example candidate linked to a selected parent article. The allowed decisions are `accept` and `reject`. Each decision must keep parent ID, child ID, relation path, source hash, reviewer and reason. Require `candidate_count = accepted_decision_count + rejected_decision_count` and zero unresolved candidates. A reviewed exclusion is a rejection with a reason, not a missing decision.
+
+WPQ-FORMAL-3 — Require at most 5 accepted examples per parent article. Allow 6 or 7 only with a stored review override and reason. Reject templates, duplicate Japanese text and duplicate parent-child-relation identities unless a reviewed rule explicitly makes them distinct.
+
+WPQ-FORMAL-4 — Require every accepted example to have immutable Japanese text, reading, source relation, source translation path and one `example_translation` unit. Require one accepted Russian result with matching unit ID, source hash and context hash. Empty, missing, scalar-contract-mismatched or reused-without-exact-context translations fail the gate.
+
+WPQ-FORMAL-5 — Scan the built Yomitan ZIP, not an intermediate render. Require exactly one structured example container for every accepted example and no container without an accepted decision. Each container must appear under the intended parent and reviewed sense or article scope. It must contain separate `ja` and `ru` content, preserve the Japanese text and reading, and match the accepted Russian translation.
+
+WPQ-FORMAL-6 — Require `accepted_example_count = translated_example_unit_count = exported_example_container_count`. Require zero missing pairs, duplicates, wrong-parent attachments, wrong-sense attachments, unapproved containers and silent losses. Store the exact identities and counts in a machine-readable report tied to the selection hash, manifest hashes and ZIP SHA-256.
+
+WPQ-FORMAL-7 — The export command must stop with a nonzero result when any formal example check fails. It must not label the artifact complete and must not publish or replace the review site. The orchestrator reports `FAIL — examples stage missing` when candidate parents exist but the decision, translation or archive stages are absent.
+
+WPQ-FORMAL-8 — After this gate passes, test example rendering in the pinned Yomitan client as required by WPQ-GATES-3. The HTML review page and schema validation cannot replace either the formal ZIP check or the Yomitan popup check.
+
+WPQ-FORMAL-9 — The completed legacy Wadoku SQLite runs contain zero `example` units, zero `example_translation` units and no stored `main/VwBsp` relations in article JSON. The standalone rich pilots also did not write example candidates, decisions or translations to a database. Treat this as the measured baseline. Do not claim that examples already exist in the authoritative run database.
+
+WPQ-FORMAL-10 — Build the initial example candidate inventory from the immutable official Wadoku XML, not from legacy translation rows. Store every imported relation in the authoritative database of the new run before example selection starts. Keep parent ID, child ID, relation path, source hash, Japanese text, reading and source translation paths.
+
+WPQ-FORMAL-11 — Store reviewed accept and reject decisions, `example_translation` units, accepted Russian targets and export identities in the same authoritative run database. Do not use an HTML page, standalone pilot directory or old SQLite translation as the source of truth for this stage. A later database migration must preserve exact counts and hashes.
+
+WPQ-FORMAL-12 — The orchestrator preflight must query the selected authoritative database and report counts for imported candidates, decisions, unresolved candidates, example translation units and accepted example translations. If selected parent articles have XML candidates but any required database stage is empty or incomplete, stop before translation or export and report `FAIL — examples database stage missing`.
+
 ## WPQ-D — Translation contract and context budget
 
 WPQ-D-1 — Preserve the lossless source-block list separately from the versioned translation projection. Group unrestricted alternatives within ONE source sense into a `glossary_set`; return an ordered array of distinct Russian equivalents. Restricted/protected blocks and explanations retain their own IDs and scalar targets. Keep an exact member-path map so every source block is accounted for. Do not merge senses, even when German or Russian strings coincide.

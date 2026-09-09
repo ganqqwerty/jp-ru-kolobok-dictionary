@@ -58,6 +58,7 @@ def test_bad_devoicing_fails_closed():
     assert parse_devoicing('[Dev]ひと･かい', 'ひとかい') == [1]
     assert parse_devoicing('[Dev]しゅっぱつ', 'しゅっぱつ') == [1]
     assert parse_devoicing('[Dev]す[Dev]き', 'すき') == [1, 2]
+    assert parse_devoicing('[Gr]ま[Dev]くしみりあん', 'まくしみりあん') == [2]
     for notation in ('き[Unknown]つけ', 'き[Dev]つけ[Dev]', 'き[Dev]け', 'し[Dev]ゅつ'):
         if '[Dev]' in notation:
             with pytest.raises(ValueError):
