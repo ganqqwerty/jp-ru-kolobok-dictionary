@@ -529,6 +529,38 @@ def _render_reference(
     return _labeled_div(kind, [_span(target, "ja" if _tree_descendants(node, "jap") else None)])
 
 
+def sense_translation_entry(value: dict[str, Any]) -> dict[str, Any]:
+    """Project plain sibling equivalents into one unit without altering the XML tree.
+
+    Translations carrying inline restrictions stay scalar. Their protected content
+    must not be discarded when synonyms are condensed.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    nodes = dict((path, node) for node, path in _tree_paths(value["tree"]))
+    for block in value["blocks"]:
+        trans_path = block["xml_path"].rsplit("/", 1)[0]
+        trans = nodes.get(trans_path, {})
+        if (block["role"] == "translation" and block["sense_path"]
+                and not block["protected_fragments"]
+                and trans.get("tag") == "trans" and not trans.get("attributes")
+                and len(trans.get("children", [])) == 1):
+            groups.setdefault(block["sense_path"], []).append(block)
+    replacements = {}
+    omitted = set()
+    for members in groups.values():
+        first = members[0]
+        texts = [item["source_text"] for item in members]
+        replacements[first["xml_path"]] = {
+            **first, "role": "glossary_set", "source_text": canonical_json(texts).decode(),
+            "prompt_text": canonical_json(texts).decode(),
+            "member_paths": [item["xml_path"] for item in members],
+            "has_translatable_text": any(item["has_translatable_text"] for item in members),
+        }
+        omitted.update(item["xml_path"] for item in members[1:])
+    return {**value, "blocks": [replacements.get(block["xml_path"], block)
+                                for block in value["blocks"] if block["xml_path"] not in omitted]}
+
+
 def structured_entry(
     value: dict[str, Any], language: str,
     labels: dict[tuple[str, str], dict[str, Any]],
@@ -539,6 +571,7 @@ def structured_entry(
     targets = targets or {}
     blocks = value["blocks"]
     block_by_path = {block["xml_path"]: (index, block) for index, block in enumerate(blocks)}
+    omitted_paths = {path for block in blocks for path in block.get("member_paths", [])[1:]}
     rendered_block_indices: set[int] = set()
     tree = value["tree"]
     form = next((child for child in tree["children"] if child["tag"] == "form"), None)
@@ -547,6 +580,8 @@ def structured_entry(
         raise ValueError(f"Wadoku entry {value['entry_id']} lacks form or sense")
 
     def render_node(node: dict[str, Any], path: str) -> list[Any]:
+        if path in omitted_paths:
+            return []
         selected = block_by_path.get(path)
         if selected is not None:
             index, block = selected
@@ -558,8 +593,14 @@ def structured_entry(
                 if block["has_translatable_text"]:
                     raise ValueError(f"missing Russian target for block {index} of {value['entry_id']}")
                 target = block["prompt_text"]
-            label = _localized_label(labels, "section", block["role"], language)
-            return [_labeled_div(label, _block_spans(block, target, language))]
+            if block["role"] == "glossary_set":
+                items = json.loads(block["source_text"]) if language == "de" else target
+                if not isinstance(items, list) or not items or not all(isinstance(x, str) for x in items):
+                    raise ValueError("glossary_set requires nonempty string array")
+                return [{"tag": "span", "data": {"content": "glossary"},
+                         "lang": language, "content": "; ".join(items)}]
+            return [{"tag": "div", "data": {"content": block["role"]},
+                     "content": _block_spans(block, target, language)}]
         tag = node["tag"]
         if tag == "usg":
             usage_type = node["attributes"].get("type", "")
@@ -569,10 +610,7 @@ def structured_entry(
                 [_span(_localized_label(labels, "usage", code, language), language)]
                 if raw_text else []
             )
-            return [_labeled_div(
-                _localized_label(labels, "usage-category", usage_type, language, usage_type),
-                content,
-            )]
+            return [{"tag": "span", "style": {"fontStyle": "italic"}, "content": [*content, " · "]}]
         if tag in {"ref", "sref"}:
             return [_render_reference(node, labels, language)]
         rendered: list[Any] = []
@@ -587,47 +625,18 @@ def structured_entry(
                 rendered.append(_span(child["tail"], language))
         return rendered
 
-    orths = _tree_descendants(form, "orth")
-    hiras = _tree_descendants(form, "hira")
-    hatsuon = _tree_descendants(form, "hatsuon")
-    accents = _tree_descendants(form, "accent")
-    content: list[Any] = [
-        _labeled_div(
-            _localized_label(labels, "section", "forms", language),
-            [_span(" · ".join(_plain_tree(node) for node in orths), "ja")],
-        ),
-        _labeled_div(
-            _localized_label(labels, "section", "reading", language),
-            [_span(" · ".join(_plain_tree(node) for node in hiras), "ja")],
-        ),
-    ]
-    pronunciation = " · ".join([
-        *(_plain_tree(node) for node in hatsuon),
-        *(f"accent={_plain_tree(node)}" for node in accents),
-    ])
-    if pronunciation:
-        content.append(_labeled_div(
-            _localized_label(labels, "section", "pronunciation", language),
-            [_span(pronunciation, "ja")],
-        ))
-    grammar_nodes = [child for child in tree["children"] if child["tag"] == "gramGrp"]
-    grammar_codes = [child["tag"] for group in grammar_nodes for child in group["children"]]
-    if grammar_codes:
-        content.append(_labeled_div(
-            _localized_label(labels, "section", "grammar", language),
-            [_span(", ".join(_localized_label(labels, "grammar", code, language)
-                             for code in grammar_codes), language)],
-        ))
     sense_items = []
     for sense_index, sense in enumerate(senses, 1):
         sense_items.append({
             "tag": "li",
             "content": render_node(sense, f"/entry[1]/sense[{sense_index}]") or [_span("")],
         })
-    content.append(_labeled_div(
-        _localized_label(labels, "section", "senses", language),
-        [{"tag": "ol", "content": sense_items}],
-    ))
+    # Headwords, readings, grammar tags and pitch are already native Yomitan data.
+    content = [{"tag": "ol", "content": sense_items}] if len(sense_items) > 1 else sense_items[0]["content"]
+    templates = list(dict.fromkeys(_plain_tree(n) for n in _tree_descendants(form, "orth")
+                                  if "…" in _plain_tree(n) and n["attributes"].get("midashigo") != "true"))
+    if templates:
+        content = [_span(" · ".join(templates), "ja"), *content]
     totals: Counter[str] = Counter()
     for child in tree["children"]:
         totals[child["tag"]] += 1
@@ -642,7 +651,8 @@ def structured_entry(
 
 
 def _entry_forms(value: dict[str, Any]) -> list[dict[str, Any]]:
-    orths = _tree_descendants(value["tree"], "orth")
+    form = next(child for child in value["tree"]["children"] if child["tag"] == "form")
+    orths = _tree_descendants(form, "orth")
     searchable = [node for node in orths if node["attributes"].get("midashigo") != "true"]
     selected = searchable or orths
     result: list[dict[str, Any]] = []
@@ -673,7 +683,7 @@ def yomitan_rows(
 ) -> tuple[list[list[Any]], list[list[Any]]]:
     _expression, reading, sequence = canonical_identity(value)
     glossary = [structured_entry(value, language, labels, targets)]
-    grammar = [child["tag"] for group in _tree_descendants(value["tree"], "gramGrp")
+    grammar = [_localized_label(labels, "grammar", child["tag"], language).replace(" ", "‑") for group in _tree_descendants(value["tree"], "gramGrp")
                for child in group["children"]]
     inflection_rules = yomitan_inflection_rules(value)
     accents = []
@@ -685,7 +695,7 @@ def yomitan_rows(
     metadata: list[list[Any]] = []
     for form in _entry_forms(value):
         expression = _plain_tree(form)
-        term_tags = [form["attributes"]["type"]] if form["attributes"].get("type") else []
+        term_tags = [_localized_label(labels, "orthography", form["attributes"]["type"], language).replace(" ", "‑")] if form["attributes"].get("type") else []
         rows.append([expression, reading, " ".join(dict.fromkeys(grammar)), inflection_rules, 0,
                      glossary, sequence, " ".join(term_tags)])
         if accents:
@@ -700,7 +710,8 @@ def tag_rows(
                     "usage-category": "usage", "orthography": "orthography",
                     "reference": "reference"}
     return [
-        [code, category_map[category], item["order"], item[language], 0]
+        [item[language].replace(" ", "‑") if category in {"grammar", "orthography"} else code,
+         category_map[category], item["order"], item[language], 0]
         for (category, code), item in sorted(labels.items(), key=lambda pair: pair[1]["order"])
         if category in category_map
     ]
@@ -745,6 +756,7 @@ def build_rich_archive(
     *, language: str, labels: dict[tuple[str, str], dict[str, Any]], license_text: bytes,
     title: str, revision: str, source_url: str, source_sha256: str,
     export_audit_id: int | str, description_note: str | None = None,
+    row_factory=None,
 ) -> dict[str, Any]:
     index = {
         "title": title, "revision": revision, "format": 3, "sequenced": True,
@@ -777,7 +789,7 @@ def build_rich_archive(
             write(archive, f"tag_bank_{tag_bank_number}.json",
                   canonical_json(tags[offset:offset + 10_000]))
         for value, targets in entries:
-            rows, metadata = yomitan_rows(value, language, labels, targets)
+            rows, metadata = (row_factory or yomitan_rows)(value, language, labels, targets)
             term_buffer.extend(rows)
             meta_buffer.extend(metadata)
             entry_count += 1

@@ -212,7 +212,7 @@ WXR-TR-7 — Preserve one output value for every input semantic block. Do not al
 
 WXR-TR-8 — Use `prompts/translate_luna_wadoku_xml_ru_v2.txt`. Base its article method and Russian lexicographic style on the proven Kolobok prompt. Require Russian learner-facing text, exact protected-token preservation, and respect for specialized Yomitan fields. The prompt must obey the supplied article-group decision and must never merge or split articles itself.
 
-WXR-TR-9 — Run a 100-request pilot with concurrency 10, startup time 10 seconds, and request timeout 240 seconds. The first 100 batches must cover every block role, blocks with zero, one, and several placeholders, small and large blocks, and every still-pending unit from WXR-SAMPLE. Review the fixed sample and report request failures, validator failures, input and output tokens, latency, and protected-token failures before the full run.
+WXR-TR-9 — Run the fixed 150-entry pilot from WXR-PILOT with concurrency 5, startup time 10 seconds, and request timeout 240 seconds. Pack it by the normal 24,576-byte limit; do not force 100 requests. Review every selected article and report classification accuracy, translation corrections, request failures, validator failures, input and output tokens, latency, and protected-token failures before the full run.
 
 WXR-TR-10 — Use production concurrency 100, startup time 30 seconds, and request timeout 240 seconds after the pilot gates pass. Keep these values unless real rate-limit or timeout evidence requires a recorded change. Use the existing PostgreSQL lease and retry workflow.
 
@@ -316,13 +316,13 @@ WXR-QA-4 — Record Russian corrections as explicit replacement targets with an 
 
 WXR-PHASE-1 — Phase A creates the source snapshot, streaming importer, canonical entry model, parent-reference graph, and structural inventory report.
 
-WXR-PHASE-2 — Phase B classifies lexical article groups, enables reviewed Yomitan deinflection, resolves placeholder lookup expressions, runs dedicated Luna classification or expansion only for unresolved cases, and then creates and validates `dist/wadoku-jp-de-rich.zip`. This proves popup behavior and complete structure before Russian translation starts.
+WXR-PHASE-2 — Phase B freezes the 150-entry pilot, records human grouping gold, and runs article grouping, lookup expansion, German rendering, Russian translation, and popup checks only for this pilot.
 
-WXR-PHASE-3 — Phase C defines Russian translation units, controlled Russian labels, the Luna prompt, and validators.
+WXR-PHASE-3 — Phase C reviews the complete pilot by quota and records the explicit proceed or stop decision.
 
-WXR-PHASE-4 — Phase D measures safe V1 reuse and imports only mappings that pass the exact rules in WXR-REUSE.
+WXR-PHASE-4 — Phase D completes article grouping and lookup resolution for the remaining source, then creates and validates the complete German archive.
 
-WXR-PHASE-5 — Phase E runs the bounded pilot, then runs the remaining Luna batches through PostgreSQL, repairs failures, and accepts deterministic results.
+WXR-PHASE-5 — Phase E measures safe V1 reuse, runs the remaining Russian Luna batches through PostgreSQL, repairs failures, and accepts deterministic results.
 
 WXR-PHASE-6 — Phase F exports `dist/wadoku-jp-ru-rich.zip`, runs all structural and language gates, and creates the final PostgreSQL dump.
 
@@ -366,7 +366,7 @@ WXR-ENV-3 — Before a write, confirm that `WADOKU_POSTGRES_URL` is present, poi
 
 WXR-FILES-1 — Add `src/jitendex_ru/wadoku_xml.py`. It owns streaming XML parsing, lossless node conversion, parent-graph construction, subentry classification, lookup resolution, semantic-block extraction, controlled-label rendering, exact V1 reuse mapping, structured-content rendering, and structural comparison.
 
-WXR-FILES-2 — Add `scripts/wadoku_xml_dictionary.py`. It exposes the commands `db-check`, `prepare`, `source-report`, `classify-article-groups`, `make-article-group-batches`, `article-group-check`, `resolve-lookups`, `make-lookup-batches`, `lookup-check`, `export-de`, `reuse-v1`, `make-batches`, `pilot-check`, `export-checkpoint`, `progress`, `article-log`, `failures`, `replace-target`, `export-ru`, `verify-de`, `verify-ru`, and `compare`.
+WXR-FILES-2 — Add `scripts/wadoku_xml_dictionary.py`. It exposes the commands `db-check`, `prepare`, `source-report`, `select-pilot`, `pilot-gold-template`, `classify-article-groups`, `make-article-group-batches`, `article-group-check`, `resolve-lookups`, `make-lookup-batches`, `lookup-check`, `export-de`, `reuse-v1`, `make-batches`, `pilot-check`, `export-checkpoint`, `progress`, `article-log`, `failures`, `replace-target`, `export-ru`, `verify-de`, `verify-ru`, and `compare`.
 
 WXR-FILES-3 — Add `config.wadoku.xml.luna.toml`. Base it on `config.wadoku.luna.toml`, set pipeline version and extractor version `wadoku-xml-v2`, translation-prompt version `translate-luna-wadoku-xml-ru-v2`, article-group prompt version `classify-luna-wadoku-article-groups-ja-v1`, lookup-expansion prompt version `expand-luna-wadoku-lookups-ja-v1`, target language `ru`, work directory `work/wadoku-xml`, model `gpt-5.6-luna`, reasoning effort `medium`, batch limits 100 units and 24,576 bytes, and request timeout 240 seconds. Add explicit paths for `terminology/ru-v1.json`, `terminology/wadoku-xml-labels-v1.json`, and `terminology/wadoku-subentry-groups-v1.json`. This run has no Russian review phase; store the SHA-256 of empty bytes in the required legacy review-prompt field.
 
@@ -573,6 +573,36 @@ WXR-REUSE-ALG-4 — For each passing pair, insert the one Russian target for the
 
 WXR-REUSE-ALG-5 — `reuse-v1` runs as a report-only command unless `--apply` is present. Its JSON report includes source rows, unique keys, duplicate exclusions, source-cardinality mismatches, new-XML mismatches, reusable blocks, applied blocks, and remaining blocks. Re-running `--apply` must make no additional changes.
 
+## WXR-PILOT — Fixed representative pilot
+
+WXR-PILOT-1 — Select exactly 150 unique source entries before any pilot Luna request. Quotas overlap. Fill any shortfall with the deterministic random holdout in WXR-PILOT-9. Store exact entry IDs, selection reasons, source hashes, and category membership in `work/wadoku-xml/pilot-selection.json`.
+
+WXR-PILOT-2 — Include 75 Kaishi entries matched by Japanese expression and reading. Stratify them across the Kaishi list, not only its first words. Cover nouns, godan and ichidan verbs, `する` verbs, irregular verbs, `い` and `な` adjectives, adverbs, counters, and common multi-sense words.
+
+WXR-PILOT-3 — Include 10 common proper-name entries. Cover surnames, male and female given names, place names, and one organization or publication name. Prefer names that collide with a common word or have several readings, because these expose lookup and sequence bugs.
+
+WXR-PILOT-4 — Include 15 grammar and function-word entries. Include `の` and examples from case particles, binding particles, sentence-ending particles, conjunctions, auxiliary verbs, prefixes, and suffixes. Require both one-character entries and grammar entries with several senses.
+
+WXR-PILOT-5 — Include eight parent-child contrast groups with three entries each when the source provides them: the parent lexeme, a pure inflected form, and an expression that contains that form plus lexical material. Cover godan, ichidan, irregular verb, adjective, negative, past, `て`, and causative behavior. WXR-SAMPLE-9 is mandatory.
+
+WXR-PILOT-6 — Include 12 entries whose source form contains `…`. Cover suffix lookup, a concrete evidence-based alias, a parent that cannot fill the slot, several written forms, and an alias collision. No pilot ZIP lookup row may contain `…`.
+
+WXR-PILOT-7 — Include at least 20 entries that jointly cover structural and translation risks: several senses, several written forms, irregular or old forms, same spelling with different readings, same reading with different spellings, examples, cross-references, usage or register labels, domain labels, etymology, scientific names, dates, protected inline fragments, multiple pitch accents, devoicing notation, and a source block near the request-size limit.
+
+WXR-PILOT-8 — Include both exact V1-reuse candidates and Luna-only translation units. This checks that reused and newly translated blocks produce the same Yomitan structure. Include one fully protected block and one entry with no translatable learner text.
+
+WXR-PILOT-9 — Reserve 15 entries as a deterministic random holdout from entries not selected by another quota. Seed the selection with the pinned Wadoku archive SHA-256. Do not replace these entries because they look uninteresting; they measure hand-selection bias.
+
+WXR-PILOT-10 — Freeze a human gold decision for every selected parent-child relation before reading Luna output. Record `article_policy`, `lookup_policy`, and expected Yomitan rule. Score Luna classification against this gold set.
+
+WXR-PILOT-11 — Review every pilot article in the German and Russian candidate ZIPs. Score meaning correctness, natural Russian, sense separation, form restriction, example pairing, pronunciation placement, article grouping, and popup lookup. Mark each problem as blocking, material, or cosmetic.
+
+WXR-PILOT-12 — The structural gate requires zero schema failures, lost blocks, placeholder failures, wrong sequence inheritance, duplicate pure-form articles, suppressed independent expressions, broken example pairs, and literal `…` lookup rows. Any systematic structural error stops the full run.
+
+WXR-PILOT-13 — The quality report states totals and rates by quota, not only one combined score. Report high-confidence classification errors separately. Do not approve the full run when a category has fewer than five reviewed items after overlap, any blocking meaning error remains, or material corrections show one repeated prompt defect.
+
+WXR-PILOT-14 — Write the reviewed result to `work/wadoku-xml/pilot-result.json`. Include the final 150 IDs, quota coverage, batch sizes in articles, units and bytes, token usage by Luna stage, every reviewer decision, issue counts, correction rate, and the explicit proceed or stop decision.
+
 ## WXR-SAMPLE — Fixed review sample
 
 WXR-SAMPLE-1 — Use `インスリン` to check etymology, usage, pitch, pronunciation, and references.
@@ -669,13 +699,30 @@ PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py prepare \
 export WADOKU_XML_RUN_ID='<printed run id>'
 ```
 
-WXR-CMD-4G — Apply only deterministic decisions supported by explicit reviewed Wadoku relation marks. Leave mixed `VwBsp` pairs, including the WXR-SAMPLE-9 contrast, pending for Luna. The output must state how many decisions came from each exact source mark.
+WXR-CMD-4P — Select and freeze the 150-entry pilot before any classification output exists. Generate the human grouping-gold template. The reviewer completes its parent-child decisions before WXR-CMD-4H starts.
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py select-pilot \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --kaishi work/downloads/kaishi-1.5k-v2.4.1.apkg \
+  --entries 150 --kaishi-entries 75 --name-entries 10 \
+  --grammar-entries 15 --contrast-groups 8 --ellipsis-entries 12 \
+  --random-holdout 15 \
+  --output work/wadoku-xml/pilot-selection.json
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py pilot-gold-template \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
+  --output work/wadoku-xml/pilot-grouping-gold.json
+```
+
+WXR-CMD-4G — Apply only deterministic pilot decisions supported by explicit reviewed Wadoku relation marks. Leave mixed `VwBsp` pairs, including the WXR-SAMPLE-9 contrast, pending for Luna. The output must state how many decisions came from each exact source mark.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py classify-article-groups \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
   --mode deterministic \
-  --output work/wadoku-xml/article-groups.json
+  --output work/wadoku-xml/pilot-article-groups.json
 ```
 
 WXR-CMD-4H — Batch only unresolved parent-child pairs and run the dedicated classifier with Luna CLI workers. Use at most 25 pairs and 24,576 serialized bytes per request.
@@ -683,6 +730,7 @@ WXR-CMD-4H — Batch only unresolved parent-child pairs and run the dedicated cl
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py make-article-group-batches \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
   --max-articles 25 --max-units 25 --max-bytes 24576
 PYTHONPATH=src .venv/bin/python scripts/run_codex_batches.py \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
@@ -696,17 +744,20 @@ WXR-CMD-4I — Validate and apply article-group decisions. Review every non-high
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py article-group-check \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
+  --gold work/wadoku-xml/pilot-grouping-gold.json \
   --apply --require-complete \
-  --output work/wadoku-xml/article-groups.json
+  --output work/wadoku-xml/pilot-article-groups.json
 ```
 
-WXR-CMD-4A — Resolve every lookup that can be derived deterministically. Write the lookup-resolution report without changing source forms. Stop if a generated alias fails validation.
+WXR-CMD-4A — Resolve every selected pilot lookup that can be derived deterministically. Write the lookup-resolution report without changing source forms. Stop if a generated alias fails validation.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py resolve-lookups \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
   --mode deterministic \
-  --output work/wadoku-xml/lookup-resolution.json
+  --output work/wadoku-xml/pilot-lookup-resolution.json
 ```
 
 WXR-CMD-4B — Create dedicated batches only for unresolved templates and run them with Luna CLI workers. This run generates Japanese lookup aliases only. It does not translate dictionary text. Use small batches because every worker needs the complete entry and parent context.
@@ -714,6 +765,7 @@ WXR-CMD-4B — Create dedicated batches only for unresolved templates and run th
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py make-lookup-batches \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
   --max-articles 25 --max-units 25 --max-bytes 24576
 PYTHONPATH=src .venv/bin/python scripts/run_codex_batches.py \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
@@ -727,49 +779,55 @@ WXR-CMD-4C — Validate and apply accepted lookup aliases, regenerate the comple
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py lookup-check \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
   --apply --require-complete \
-  --output work/wadoku-xml/lookup-resolution.json
+  --output work/wadoku-xml/pilot-lookup-resolution.json
 ```
 
-WXR-CMD-5 — Export and verify the German edition before translation work.
+WXR-CMD-5 — Export and verify the 150-entry German pilot before Russian pilot translation. Do not put a partial archive in `dist`.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py export-de \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
-  --output dist/wadoku-jp-de-rich.zip
+  --selection work/wadoku-xml/pilot-selection.json \
+  --output work/wadoku-xml/pilot/wadoku-jp-de-rich-pilot.zip
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py verify-de \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
-  --archive dist/wadoku-jp-de-rich.zip
+  --selection work/wadoku-xml/pilot-selection.json \
+  --archive work/wadoku-xml/pilot/wadoku-jp-de-rich-pilot.zip
 ```
 
-WXR-CMD-6 — Report V1 reuse, review the report, and then apply the exact matches. The second apply run must report zero new inserts.
+WXR-CMD-6 — Report and apply exact V1 reuse only for the frozen pilot. The second apply run must report zero new inserts.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py reuse-v1 \
   --config config.wadoku.xml.luna.toml --source-run-id 2 \
-  --target-run-id "$WADOKU_XML_RUN_ID"
+  --target-run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py reuse-v1 \
   --config config.wadoku.xml.luna.toml --source-run-id 2 \
-  --target-run-id "$WADOKU_XML_RUN_ID" --apply
+  --target-run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json --apply
 ```
 
-WXR-CMD-7 — Create only 100 representative pilot batches from the remaining pending units. The Wadoku command loads the explicit terminology paths from its configuration and calls the shared batch packer. It writes exact batch and unit IDs plus coverage to the pilot-selection report. Do not create full-run batches yet.
+WXR-CMD-7 — Create translation batches only for the frozen 150-entry pilot. The Wadoku command loads the explicit terminology paths and uses the normal byte-limited batch packer. Do not create full-run translation batches yet.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py make-batches \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
   --max-articles 100 --max-units 100 --max-bytes 24576 \
-  --pilot-batches 100 --pilot-only \
+  --pilot-only \
   --pilot-output work/wadoku-xml/pilot-selection.json
 ```
 
-WXR-CMD-8 — Run the bounded pilot. Then require every selected pilot unit to have a deterministic valid target and review WXR-SAMPLE. Stop here unless `pilot-check` and the human review pass.
+WXR-CMD-8 — Run the bounded 150-entry translation pilot. Then require every selected pilot unit to have a deterministic valid target and review every selected article under WXR-PILOT. Stop here unless `pilot-check` and the human review pass.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/run_codex_batches.py \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
-  --kind translation --concurrency 10 --worker-prefix wadoku-xml-pilot \
-  --max-submissions 100 --startup-seconds 10 \
+  --kind translation --concurrency 5 --worker-prefix wadoku-xml-pilot \
+  --startup-seconds 10 \
   --request-timeout-seconds 240 --progress-interval 30
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py pilot-check \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
@@ -793,7 +851,48 @@ PYTHONPATH=src .venv/bin/translationctl \
   --run-id "$WADOKU_XML_RUN_ID"
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py export-checkpoint \
   --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --selection work/wadoku-xml/pilot-selection.json \
   --output-dir work/wadoku-xml/checkpoints
+```
+
+WXR-CMD-8C — Only after the pilot receives an explicit proceed decision, complete article grouping and lookup resolution for the remaining source. Then export and verify the complete German archive. The commands reuse accepted pilot decisions and batch only pending work.
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py classify-article-groups \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --mode deterministic --output work/wadoku-xml/article-groups.json
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py make-article-group-batches \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --max-articles 25 --max-units 25 --max-bytes 24576
+PYTHONPATH=src .venv/bin/python scripts/run_codex_batches.py \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --kind article-group --concurrency 20 --worker-prefix wadoku-article-group-full \
+  --startup-seconds 10 --request-timeout-seconds 240 --progress-interval 30
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py article-group-check \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --apply --require-complete --output work/wadoku-xml/article-groups.json
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py resolve-lookups \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --mode deterministic --output work/wadoku-xml/lookup-resolution.json
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py make-lookup-batches \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --max-articles 25 --max-units 25 --max-bytes 24576
+PYTHONPATH=src .venv/bin/python scripts/run_codex_batches.py \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --kind lookup-expansion --concurrency 20 --worker-prefix wadoku-lookup-full \
+  --startup-seconds 10 --request-timeout-seconds 240 --progress-interval 30
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py lookup-check \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --apply --require-complete --output work/wadoku-xml/lookup-resolution.json
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py export-de \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --output dist/wadoku-jp-de-rich.zip
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py verify-de \
+  --config config.wadoku.xml.luna.toml --run-id "$WADOKU_XML_RUN_ID" \
+  --archive dist/wadoku-jp-de-rich.zip
+PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py reuse-v1 \
+  --config config.wadoku.xml.luna.toml --source-run-id 2 \
+  --target-run-id "$WADOKU_XML_RUN_ID" --apply
 ```
 
 WXR-CMD-9 — Run the remaining production batches after the pilot passes. Wrap this step with WXR-REPORT-13 and send the WXR-REPORT-9 user table at the required cadence while the runner is active.
@@ -921,10 +1020,14 @@ WXR-NONGOAL-5 — Do not pretend that a finite alias list covers every possible 
 
 ## WXR-ORDER — Required execution order
 
-WXR-ORDER-1 — Run the read-only source acquisition in WXR-CMD-1. Implement WXR-FILES, run WXR-CMD-1A, complete the controlled labels, and pass the tests. Then run WXR-CMD-2 through WXR-CMD-4.
+WXR-ORDER-5 — Before any full translation run, integrate and test the pilot-v2 sense-level translation contract in production batching, validation, persistence, reuse hashes and export. Unrestricted equivalents within one sense form one glossary array; restricted or protected blocks remain separate. Never feed these arrays through the old scalar-only contract. Keep the original source tree lossless. The standalone pilot implementation is not evidence that the database workflow already supports this contract.
 
-WXR-ORDER-2 — Complete WXR-CMD-4G through WXR-CMD-4I, then WXR-CMD-4A through WXR-CMD-4C. Fix every grouping and lookup-resolution defect before WXR-CMD-5. Then complete WXR-CMD-5 and fix all German fidelity defects before creating or translating Russian work.
+WXR-ORDER-6 — Apply the lessons in `reports/wadoku_pilot_v2_review.md` before approving the pilot. Check noun versus verb wording, particle functions, conventional names, synonym deduplication and German idioms. Any future prompt revision must have a new version; keep v3 unchanged because completed pilot calls used it. Require an unseen sample to check these failure classes, not only the 22 manually corrected units. Keep article classification, child-sense merging, template expansion and native pronunciation checks as separate release gates; this pilot has not passed them.
 
-WXR-ORDER-3 — Complete exact reuse in WXR-CMD-6, create only pilot batches in WXR-CMD-7, and pass WXR-CMD-8. Then create the remaining batches and pilot checkpoint in WXR-CMD-8A and WXR-CMD-8B before the full run in WXR-CMD-9.
+WXR-ORDER-1 — Run the read-only source acquisition in WXR-CMD-1. Implement WXR-FILES, run WXR-CMD-1A, complete the controlled labels, and pass the tests. Then run WXR-CMD-2 through WXR-CMD-4 and freeze the pilot with WXR-CMD-4P.
+
+WXR-ORDER-2 — On the frozen pilot only, complete WXR-CMD-4G through WXR-CMD-4I, then WXR-CMD-4A through WXR-CMD-4C. Complete the pilot German export in WXR-CMD-5, exact reuse in WXR-CMD-6, and Russian pilot in WXR-CMD-7, WXR-CMD-8, and WXR-CMD-8B. Stop unless WXR-PILOT passes and the user approves proceeding.
+
+WXR-ORDER-3 — After pilot approval, complete remaining article grouping, lookup resolution, and the full German export in WXR-CMD-8C. Then create remaining translation batches with WXR-CMD-8A and run WXR-CMD-9.
 
 WXR-ORDER-4 — Complete WXR-CMD-10 and WXR-CMD-11, then run WXR-SMOKE. Apply any correction through WXR-FAIL-8 and repeat export, verification, comparison, and smoke testing. After smoke passes, complete WXR-CMD-11A and WXR-CMD-12. Release only when all ten WXR-VAL gates pass and the release report contains the hashes and counts required by WXR-DONE-6.

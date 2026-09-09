@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "reviewer": "orchestrator",
+  "corrections": [
+    {
+      "entry_id": 627246,
+      "unit_id": "wdx-f44889bbc50a628b8686981bb16ff967",
+      "source_sha256": "304ad82361543b4ab2c6ed84b84ef4540078ef303088a272b38202abb447c4d6",
+      "target_text": [
+        "прекрасный",
+        "великолепный",
+        "замечательный"
+      ],
+      "reason": "Condense near-synonyms."
+    },
+    {
+      "entry_id": 627246,
+      "unit_id": "wdx-d7e59b90dd0b9f83f05b726b289fa97e",
+      "source_sha256": "17a33cd8d5c51aa45801c81cf261a6994bc8d0d41ff2de135b8b1b806e28e90d",
+      "target_text": [
+        "поразительный",
+        "необычайный по силе или степени"
+      ],
+      "reason": "Daijisen sense 2 describes extraordinary degree. https://dictionary.goo.ne.jp/word/素晴らしい/"
+    },
+    {
+      "entry_id": 4797765,
+      "unit_id": "wdx-1ba1f474664f106ce31c21895235fb35",
+      "source_sha256": "5d655f005973c352f26f4ecee8c6f7153b0e2e0833e83789277e98b7b51663a5",
+      "target_text": [
+        "собака"
+      ],
+      "reason": "German gender, age and baby-talk alternatives do not require separate Russian equivalents."
+    },
+    {
+      "entry_id": 2849163,
+      "unit_id": "wdx-197c62091706d1de2b422962d5f8d7f5",
+      "source_sha256": "213cbc1201b0d499548f700c972e93764a4d729d29f1a75ca035e8b13bb4024a",
+      "target_text": [
+        "спуск",
+        "снятие",
+        "выгрузка"
+      ],
+      "reason": "Preserve noun part of speech."
+    },
+    {
+      "entry_id": 2849163,
+      "unit_id": "wdx-a6b3a1aee242328b6aeb2ca4c92fe38b",
+      "source_sha256": "72d3a59242db5ca298ab40f9109e817201a14d21620161a0fd7d841bd7e70842",
+      "target_text": [
+        "натирание",
+        "измельчение на тёрке"
+      ],
+      "reason": "Preserve noun part of speech."
+    },
+    {
+      "entry_id": 2849163,
+      "unit_id": "wdx-021dd7684d49b2cc36191133146522a2",
+      "source_sha256": "6f7dd84e10b9013d68526e3996292f9d6f5c76d2028c15c616a90d75d06d247e",
+      "target_text": [
+        "тёртый продукт"
+      ],
+      "reason": "Remove redundant synonym."
+    },
+    {
+      "entry_id": 2849163,
+      "unit_id": "wdx-b121c36751af18f64246c4c76f3d7aa0",
+      "source_sha256": "dfc67a87bfab8f4e071d07831aff51136545d512a38f7e483b7d9cb65dd375d2",
+      "target_text": [
+        "разделка на филе"
+      ],
+      "reason": "Preserve noun part of speech."
+    },
+    {
+      "entry_id": 6648704,
+      "unit_id": "wdx-87fb68e0b4507fb745d86ff5fd4fc4a7",
+      "source_sha256": "b689ba075f8e5ffdc0f3445cdd696c9d9a709f104a587fc312eacfe669e443d3",
+      "target_text": [
+        "тяга",
+        "вытягивание"
+      ],
+      "reason": "Preserve noun part of speech."
+    },
+    {
+      "entry_id": 7507347,
+      "unit_id": "wdx-a53c53c3b2b4ffacf66f5877f433beeb",
+      "source_sha256": "0ffa800bd6c6315ce2efc7f7a5334cd562b1c1a50a9774c1e80c7bb5d6b778a7",
+      "target_text": [
+        "купелирование"
+      ],
+      "reason": "German nominal infinitive names a process."
+    },
+    {
+      "entry_id": 2181916,
+      "unit_id": "wdx-91f85bbc6c22f8de993c560a0503fcbf",
+      "source_sha256": "81bfe2257dbd8fc542ab9eedb8016a9e34ee8899e0d18d9b0f40de96bdc506cb",
+      "target_text": [
+        "плодоношение"
+      ],
+      "reason": "German nominal infinitive names a process."
+    },
+    {
+      "entry_id": 202992,
+      "unit_id": "wdx-42073cd60fb337e4f2506fc80044d4fb",
+      "source_sha256": "44e6933a07647f12b47e236817bcd9d9c96519d18e21e74a88fbf2847e074e84",
+      "target_text": [
+        "Иосиф",
+        "Йозеф"
+      ],
+      "reason": "Josef does not support French transcription Жозеф."
+    },
+    {
+      "entry_id": 714571,
+      "unit_id": "wdx-d911121a005afcfaaa761468c9a71f12",
+      "source_sha256": "829379599f695f50a1cf788862acfbd63864f6db25f3289671f124aea1ee7a80",
+      "target_text": [
+        "превращает предшествующее выражение в название действия или ситуации: «то, что…»"
+      ],
+      "reason": "Explain nominalizing function."
+    },
+    {
+      "entry_id": 714571,
+      "unit_id": "wdx-6596d23faada41f540d3bffc4093ba1b",
+      "source_sha256": "e7453af8e3c283bb0f92ae9533295c20153f0d26f79eaa8d57e63e655645e2e2",
+      "target_text": [
+        "заменяет название предмета: «тот», «то»"
+      ],
+      "reason": "Explain pronominal substitution."
+    },
+    {
+      "entry_id": 1823533,
+      "unit_id": "wdx-ec9637cf27ca7232b8fa555af9f058f6",
+      "source_sha256": "766c6795fd8148d30e43f9a66917be4aa8a97a67f127f25a4f6873cc1209c6f9",
+      "target_text": [
+        "указывает время: «в», «на»"
+      ],
+      "reason": "Explain temporal function."
+    },
+    {
+      "entry_id": 1823533,
+      "unit_id": "wdx-8d9acc18fbdbe6f2d5842bfe84b99d4e",
+      "source_sha256": "6b8060feb7b3d2b50cf500bd812e3e77ee49f2c7d18b767afe7474cdf725e7dd",
+      "target_text": [
+        "указывает место нахождения: «в», «на»"
+      ],
+      "reason": "Explain locative function."
+    },
+    {
+      "entry_id": 1823533,
+      "unit_id": "wdx-167984753d4a91f609a66139fcb7fc1b",
+      "source_sha256": "00d57a13509b959aebeaaef592cf53e7a5372aba84ea4f603e5fa1b12b77ca50",
+      "target_text": [
+        "указывает направление движения: «в», «к»"
+      ],
+      "reason": "Explain direction."
+    },
+    {
+      "entry_id": 1823533,
+      "unit_id": "wdx-49032bddf8fc77a0530c05acae6d2c66",
+      "source_sha256": "68f9f446d22020e0685f87295026e67455fe426644626691ac3da30b84836a33",
+      "target_text": [
+        "указывает адресата или цель: «кому», «к», «на»"
+      ],
+      "reason": "Explain recipient or goal."
+    },
+    {
+      "entry_id": 1823533,
+      "unit_id": "wdx-4e701d65c720e2e394e308a33bf89e96",
+      "source_sha256": "0d1f93e2c0062d43a3caec5915bf4342c039443e9ea3236c13310a3afb330edc",
+      "target_text": [
+        "в сочетаниях со словами положения: «над», «на»"
+      ],
+      "reason": "Avoid unsupported crossing interpretation of German über."
+    },
+    {
+      "entry_id": 1823533,
+      "unit_id": "wdx-73cb3625c03671b3e2844361797e8b9a",
+      "source_sha256": "50e21f2fbd590e79161666c0a84cd3db3b76ec5000876f573d3b4d69afd160e3",
+      "target_text": [
+        "указывает источник или действующее лицо: «от», «кем»"
+      ],
+      "reason": "Clarify source or agent."
+    },
+    {
+      "entry_id": 7271622,
+      "unit_id": "wdx-82536739be98d3dc6728ca92418b8042",
+      "source_sha256": "df095a41cd5e729ef2b1c63d7f99c271cb53f1f0e4654e2dd90f839de829f4b8",
+      "target_text": [
+        "путы",
+        "оковы для ног"
+      ],
+      "reason": "Fessel means restraint here, not a leg."
+    },
+    {
+      "entry_id": 4256995,
+      "unit_id": "wdx-b2514f18cab4fff7c60aaa28fb460dfc",
+      "source_sha256": "719472c793cf40ec7466659d02c81ecd327d671d9363dee2cff3c523c5ecd2f9",
+      "target_text": [
+        "дура",
+        "глупая женщина"
+      ],
+      "reason": "Translate insulting meaning rather than German poultry metaphor."
+    },
+    {
+      "entry_id": 515,
+      "unit_id": "wdx-ab8ef088065cebf979741641b0e67a61",
+      "source_sha256": "f25365b35682551a3b6faa5e0de9ae38672454205e0623fae0488e5b8aef77ab",
+      "target_text": [
+        "ископаемые человеческие кости из Миккаби"
+      ],
+      "reason": "Use natural wording and plural supported by definition."
+    }
+  ]
+}
