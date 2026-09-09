@@ -24,7 +24,7 @@ from jitendex_ru.schema_validation import validate_archive
 from jitendex_ru.validate_response import wadoku_target_issues
 from jitendex_ru.util import atomic_write, canonical_json, sha256_bytes, sha256_file
 from jitendex_ru.wadoku_xml import (
-    EXPECTED_COUNTS, WADOKU_ARCHIVE_SHA256, WADOKU_PIPELINE, build_rich_archive,
+    EXPECTED_COUNTS, WADOKU_ARCHIVE_SHA256, WADOKU_PIPELINE, build_rich_archive, reference_target_index,
     canonical_identity, iter_canonical_entries, label_catalog, source_report,
     translation_unit_id, decode_v1_single_block, localized_archive_shape,
 )
@@ -305,6 +305,7 @@ def export_de(config: Config, run_id: int, output: Path) -> dict[str, Any]:
         report = build_rich_archive(
             entries(), output.resolve(), language="de", labels=labels,
             license_text=Path(metadata["license_path"]).read_bytes(),
+            reference_targets=reference_target_index(Path(metadata["xml_path"])),
             title=config.raw["product"]["de"]["title"],
             revision=config.raw["product"]["de"]["revision"],
             source_url=run["source_url"], source_sha256=run["snapshot_sha256"],
@@ -478,6 +479,7 @@ def export_ru(config: Config, run_id: int, output: Path) -> dict[str, Any]:
             _localized_entries(connection, run_id, complete_only=False),
             output.resolve(), language="ru", labels=labels,
             license_text=Path(metadata["license_path"]).read_bytes(),
+            reference_targets=reference_target_index(Path(metadata["xml_path"])),
             title=config.raw["product"]["ru"]["title"],
             revision=config.raw["product"]["ru"]["revision"],
             source_url=run["source_url"], source_sha256=run["snapshot_sha256"],
@@ -523,6 +525,7 @@ def export_checkpoint(config: Config, run_id: int, output_dir: Path) -> dict[str
             _localized_entries(connection, run_id, complete_only=True), output,
             language="ru", labels=labels,
             license_text=Path(metadata["license_path"]).read_bytes(),
+            reference_targets=reference_target_index(Path(metadata["xml_path"])),
             title=f"{product['title']} (неполный контрольный экспорт)",
             revision=f"{product['revision']}-checkpoint-run-{run_id}-{complete_entries}",
             source_url=run["source_url"], source_sha256=run["snapshot_sha256"],

@@ -1,5 +1,7 @@
 # WXR — Wadoku XML rich Yomitan build plan
 
+WXR-CURRENT-1 — Execution is on hold. Read [WPQ — Pipeline QA revision](WADOKU_PIPELINE_QA_REVISION.md) before any command below. It covers all 30 manual-review issues and overrides conflicting legacy details. This specification update does not claim that its runtime gates are implemented.
+
 WXR-1 — Build two rich Yomitan dictionaries directly from the official Wadoku XML. The first is Japanese-to-German and preserves the original German text without Luna translation. The second is Japanese-to-Russian and uses the same structure with Russian text.
 
 WXR-2 — Keep the current `dist/wadoku-jp-ru.zip` as the complete flat Russian V1 release. Build the rich German and Russian editions as separate artifacts until every release gate passes.
@@ -15,6 +17,8 @@ WXR-OUT-3 — Produce `dist/wadoku-jp-ru-rich.zip` as the translated Japanese-to
 WXR-OUT-4 — Generate both editions from one canonical PostgreSQL snapshot and one shared structural renderer. Language-specific text must be an overlay, not a separate structural conversion.
 
 WXR-OUT-5 — Give both editions the same Wadoku entry IDs, sequence grouping, form order, sense order, references, pronunciation, and pitch data.
+
+WXR-OUT-6 — Apply WPQ-A-7 through WPQ-A-9 to pitch grouping: pronunciation variants with identical applicable senses share an article; different applicable sense sets receive separate article sequences. Preserve source identity separately from export sequence. Uncertain membership requires classification and review, not an automatic split by pitch count.
 
 WXR-OUT-6 — Set `sourceLanguage` to `ja` in both archives. Set `targetLanguage` to `de` in the German archive and `ru` in the Russian archive.
 
@@ -198,7 +202,7 @@ WXR-IMP-7 — Complete and validate the German Yomitan renderer before creating 
 
 WXR-TR-1 — For the Russian edition, translate semantic blocks, not arbitrary XML text fragments. A Russian phrase needs enough German context to remain grammatical.
 
-WXR-TR-2 — Use one stable unit for each ordered translation block, definition, explanation, description, and etymology block that contains German learner text after protected fragments are removed. A block that is fully protected remains shared source structure and does not call Luna.
+WXR-TR-2 — Use the versioned projection in WPQ-D: one glossary_set for unrestricted equivalents within one sense, separate scalar units for restricted blocks and explanations, and paired example_translation units. Preserve the raw source-block list and exact projection member paths.
 
 WXR-TR-3 — Include the lexical article group ID, source-entry role, form restriction, source form, accepted lookup aliases, reading, part of speech, domain, register, sense position, nearby alternatives, and parent-entry context in the Luna context. Mark article grouping and all Japanese lookup data as read-only.
 
@@ -208,13 +212,13 @@ WXR-TR-5 — Replace protected inline fragments with stable placeholders before 
 
 WXR-TR-6 — Localize controlled labels through reviewed code tables. Do not ask Luna to translate the same part-of-speech or domain label thousands of times.
 
-WXR-TR-7 — Preserve one output value for every input semantic block. Do not allow Luna to merge blocks or change their order.
+WXR-TR-7 — Require one typed result per projected unit, not one scalar per XML fragment. Preserve IDs, order, sense boundaries, restrictions and protected tokens. Condense equivalents only inside the supplied glossary_set.
 
-WXR-TR-8 — Use `prompts/translate_luna_wadoku_xml_ru_v2.txt`. Base its article method and Russian lexicographic style on the proven Kolobok prompt. Require Russian learner-facing text, exact protected-token preservation, and respect for specialized Yomitan fields. The prompt must obey the supplied article-group decision and must never merge or split articles itself.
+WXR-TR-8 — Freeze the next prompt under WPQ-D-3 after the matching typed contract is implemented. Keep v2/v3/v4 provenance unchanged. Do not switch the live config or reinterpret old manifests as a new contract.
 
 WXR-TR-9 — Run the fixed 150-entry pilot from WXR-PILOT with concurrency 5, startup time 10 seconds, and request timeout 240 seconds. Pack it by the normal 24,576-byte limit; do not force 100 requests. Review every selected article and report classification accuracy, translation corrections, request failures, validator failures, input and output tokens, latency, and protected-token failures before the full run.
 
-WXR-TR-10 — Use production concurrency 100, startup time 30 seconds, and request timeout 240 seconds after the pilot gates pass. Keep these values unless real rate-limit or timeout evidence requires a recorded change. Use the existing PostgreSQL lease and retry workflow.
+WXR-TR-10 — Choose production concurrency after measuring the revised pilot under WPQ-D-5. The old concurrency 100 is historical, not pre-approved for the larger context/example contract. Keep PostgreSQL leases and retries.
 
 WXR-TR-11 — This section applies only to the Japanese-to-Russian edition. The Japanese-to-German edition uses the original semantic blocks directly.
 
@@ -226,7 +230,7 @@ WXR-TR-14 — Keep Japanese examples and their Russian translations in paired sp
 
 WXR-TR-15 — Keep pronunciation, pitch, and word-form data outside learner-facing translation targets. Luna may use them as evidence but must not repeat them in a definition.
 
-WXR-TR-16 — The 100-article and 100-unit values are upper bounds, not targets. Stop adding articles when the serialized request reaches 24,576 bytes. Put a large article in a singleton batch, enforce the hard byte and unit limits before dispatch, and report actual articles, units, bytes, and tokens per worker.
+WXR-TR-16 — Use WPQ-D-5 pilot limits and complete request/context accounting. Article counts are upper bounds, not targets. Oversize senses need reviewed handling without truncation.
 
 ## WXR-REUSE — Reuse of V1 translations
 
@@ -256,7 +260,7 @@ WXR-REUSE-11 — Match V1 against exact original source forms and readings, not 
 
 WXR-YOM-1 — Generate a lookup row for each searchable written form. Give all rows from one XML entry the same sequence ID.
 
-WXR-YOM-2 — Set `sequenced` in `index.json`. Use the phrase entry ID for an independent phrase article. Use the main lexical entry ID for its alternative spellings and shared word-form children so their lookup rows merge into one popup article.
+WXR-YOM-2 — Set sequenced and shared sequence IDs for lexical groups. Verify the intended Yomitan grouping mode and primary dictionary; equal sequence IDs alone do not guarantee one visible article.
 
 WXR-YOM-3 — Use definition tags only for grammar and labels that apply to the complete entry. Render sense-specific domain, register, history, and usage labels inside their own sense so they do not appear to apply to other senses.
 
@@ -266,13 +270,13 @@ WXR-YOM-5 — Populate Yomitan `rules` from the reviewed mapping in WXR-GROUP-8.
 
 WXR-YOM-6 — Use structured-content definitions. Render each sense as a separate section and keep ordered translation alternatives inside it.
 
-WXR-YOM-7 — Render definitions, explanations, etymologies, scientific names, dates, and notes with visible labels. Do not concatenate them without separators.
+WXR-YOM-7 — Separate content with typed structure; keep inline explanations and references grammatical. Do not repeat Перевод before equivalents or duplicate native forms/readings in glossary text.
 
-WXR-YOM-8 — Render cross-references with their type and Japanese target text. Keep them as visible text in the first rich release. Do not add an unverified internal-link format.
+WXR-YOM-8 — Resolve typed references through accepted aliases under WPQ-B-4. Use verified Yomitan link formats, distinguish exact navigation from general search, and never emit raw IDs or unresolved template targets.
 
 WXR-YOM-9 — Set every row score to `0`. Use stable term tags for observed orthography types and primary or related-form status. Do not invent ranking weights.
 
-WXR-YOM-10 — Generate a term metadata bank for pitch accent and supported pronunciation details. Keep unsupported `hatsuon` notation visible in structured content.
+WXR-YOM-10 — Use the scoped native pronunciation mapping in WPQ-A-2/A-3. Unsupported hatsuon requires an explicit reviewed fallback or blocking issue, not raw notation in the definition.
 
 WXR-YOM-11 — Include the official source date, source URL, license, attribution, pipeline version, target language, and edition revision in each `index.json`.
 
@@ -368,9 +372,9 @@ WXR-FILES-1 — Add `src/jitendex_ru/wadoku_xml.py`. It owns streaming XML parsi
 
 WXR-FILES-2 — Add `scripts/wadoku_xml_dictionary.py`. It exposes the commands `db-check`, `prepare`, `source-report`, `select-pilot`, `pilot-gold-template`, `classify-article-groups`, `make-article-group-batches`, `article-group-check`, `resolve-lookups`, `make-lookup-batches`, `lookup-check`, `export-de`, `reuse-v1`, `make-batches`, `pilot-check`, `export-checkpoint`, `progress`, `article-log`, `failures`, `replace-target`, `export-ru`, `verify-de`, `verify-ru`, and `compare`.
 
-WXR-FILES-3 — Add `config.wadoku.xml.luna.toml`. Base it on `config.wadoku.luna.toml`, set pipeline version and extractor version `wadoku-xml-v2`, translation-prompt version `translate-luna-wadoku-xml-ru-v2`, article-group prompt version `classify-luna-wadoku-article-groups-ja-v1`, lookup-expansion prompt version `expand-luna-wadoku-lookups-ja-v1`, target language `ru`, work directory `work/wadoku-xml`, model `gpt-5.6-luna`, reasoning effort `medium`, batch limits 100 units and 24,576 bytes, and request timeout 240 seconds. Add explicit paths for `terminology/ru-v1.json`, `terminology/wadoku-xml-labels-v1.json`, and `terminology/wadoku-subentry-groups-v1.json`. This run has no Russian review phase; store the SHA-256 of empty bytes in the required legacy review-prompt field.
+WXR-FILES-3 — The current config.wadoku.xml.luna.toml is a legacy scalar configuration. Before a new run, implement WPQ, freeze new affected version identities and use a new run directory. Start Luna CLI gpt-5.6-luna with medium reasoning and WPQ-D-5 pilot limits. Do not activate a new config during this planning-only update.
 
-WXR-FILES-4 — Add `prompts/translate_luna_wadoku_xml_ru_v2.txt`. It uses response schema version 2, follows WXR-TR, and returns one result for every semantic unit. It must forbid unit omission or reordering, protected-token changes, form duplication, Japanese-structure rewriting, and flattening of pronunciation, word forms, or examples into definitions.
+WXR-FILES-4 — Keep existing prompt files unchanged. Prepare the next prompt under WPQ-D-3 with matching manifest, response validation, acceptance, reuse and export support. A prompt-only switch is prohibited.
 
 WXR-FILES-16 — Add `prompts/expand_luna_wadoku_lookups_ja_v1.txt`. It receives only unresolved lookup templates and returns strict JSON with source IDs, complete Japanese aliases, readings, confidence, and short evidence notes. It must forbid translation, definitions, wildcard output, arbitrary parent substitution, and changes to fixed template text.
 
@@ -390,13 +394,13 @@ WXR-FILES-20 — Add a reviewed Wadoku-to-Yomitan inflection-rule table and a Yo
 
 WXR-FILES-8 — Update `src/jitendex_ru/batch.py` to use `dictionary_snapshot_id` for a Wadoku run, build the context in WXR-TR-12, identify manifest pipeline `wadoku-xml-v2`, emit schema version 2, and skip Jitendex and Kaishi lookups.
 
-WXR-FILES-9 — Update `src/jitendex_ru/validate_response.py` to accept schema version 2 for pipeline `wadoku-xml-v2`. Apply the existing scalar checks, require every protected token, and allow a non-Cyrillic unchanged target only when removing protected tokens leaves no translatable source text.
+WXR-FILES-9 — Validate role-specific glossary arrays, scalar restricted text and example translations, exact source/context hashes and placeholder coverage. Structural validity alone must not grant semantic approval.
 
 WXR-FILES-10 — Update `src/jitendex_ru/schema_validation.py` to validate index, term, term-metadata, and tag banks with their four pinned schemas. Return counts for every bank type and fail on an unknown or missing required bank sequence.
 
 WXR-FILES-11 — Update `src/jitendex_ru/run_integrity.py` so progress uses `dictionary_snapshot_id` when `jitendex_snapshot_id` is null. The existing Luna runner must then report Wadoku headword, article, and unit progress correctly.
 
-WXR-FILES-12 — Update `src/jitendex_ru/cli.py` so `validate` treats review as not required only for pipeline `wadoku-xml-v2`. For this pipeline, `release_ready` requires all translation units accepted, the lookup gate passed, zero blocking issues, and zero batch-membership mismatches.
+WXR-FILES-12 — Require every WPQ gate alongside existing source, grouping, lookup, coverage and archive checks before release_ready. No mandatory full-dictionary second LLM pass does not mean no semantic review.
 
 WXR-FILES-13 — Create `reports/wadoku_xml_rich_release.md` at release time and `reports/wadoku_xml_rich_smoke.json` during the manual check. The release report includes the final article-log paths and hashes. Both follow the repository documentation-ID rules where Markdown applies.
 
@@ -503,7 +507,7 @@ WXR-CANON-3 — Every node in `tree` has `tag`, `attributes`, `text`, `tail`, an
 
 WXR-CANON-4 — Every object in `blocks` has `xml_path`, `role`, `sense_path`, `source_text`, `prompt_text`, `protected_fragments`, and `has_translatable_text`. `source_text` is the complete plain German rendering used for fidelity and V1 matching. `prompt_text` contains protected placeholders. Each protected-fragment object has `placeholder`, `text`, and its lossless `tree`. `role` is one of `translation`, `definition`, `explanation`, `etymology`, or `description`. `sense_path` is null for entry-level blocks. The array follows XML document order.
 
-WXR-CANON-5 — Create one `translation_unit` for every block whose `has_translatable_text` is true. Its JSON pointer is `/blocks/N`. Store `prompt_text` as unit source text, its hash as unit source hash, and the ordered placeholders as protected tokens. Keep the plain source and XML path in the block. Use unit ID `wdx-` plus the first 32 hexadecimal characters of SHA-256 over archive SHA, NUL, entry ID, NUL, role, NUL, XML path, NUL, and prompt-text SHA.
+WXR-CANON-5 — Keep raw source blocks immutable and create typed units in a separate versioned projection under WPQ-D. Include member paths, role, source and meaning-relevant context hashes in identity/reuse. Never reinterpret old /blocks/N scalar units as arrays in place.
 
 WXR-CANON-6 — The original archive remains the byte-level source record. The generic JSON tree is the queryable lossless record. The importer must round-trip the semantic text and structural counts; it does not need to reproduce the original XML byte formatting.
 
@@ -539,13 +543,13 @@ WXR-ROW-2 — Emit a lookup row for every distinct searchable source form and ac
 
 WXR-ROW-3 — Render each sense as a visible ordered section. Keep alternatives, definitions, explanations, etymologies, labels, and references at their original entry or sense level. The German and Russian render trees must have the same node shape; only semantic block text and controlled label strings can differ.
 
-WXR-ROW-4 — Emit pitch rows to `term_meta_bank_N.json` as `[term, "pitch", {"reading": reading, "pitches": [{"position": position}]}]`. Emit one pitch object for each `<accent>` integer. When `[Dev]` can be mapped safely from `hatsuon`, add one-based mora position `devoice`; otherwise keep the notation visible in structured content.
+WXR-ROW-4 — Emit scoped native pronunciation through WPQ-A-2/A-3. Do not gather all descendant accents into one list. Validate reading alignment and duplicates within scope. Unsupported scope or pronunciation requires reviewed disposition.
 
 WXR-ROW-5 — Set `format` to `3`, `sequenced` to true, `sourceLanguage` to `ja`, and the correct target language in `index.json`. Put the official source URL in `url`, license and Wadoku credit in `attribution`, and source date, archive hash, pipeline version, edition revision, and PostgreSQL export audit ID in `description`. Include the original `LICENSE` as a separate archive member.
 
 WXR-ROW-6 — Emit tag-bank version 3 rows as `[code, category, order, notes, score]`. Use stable codes shared by both editions, categories `grammar`, `usage`, `orthography`, or `reference`, explicit order from the terminology file, localized notes, and score zero.
 
-WXR-ROW-7 — The one glossary item has shape `{"type":"structured-content","content":{"tag":"div","content":[...]}}`. The root content shows forms, reading and pronunciation, entry grammar, an ordered-list `ol` of senses, and entry-level references or notes in that order.
+WXR-ROW-7 — The glossary contains entry labels, ordered scoped senses, paired examples and notes. Do not repeat native forms/readings/pronunciation. Preserve related-sense hierarchy and inline-reference placement.
 
 WXR-ROW-8 — Render every sense as one `li`. Inside it, keep source order and use `div` containers for usage labels, alternatives, definitions, explanations, etymology, and references. Put the localized section label in a `span` with `style.fontWeight` set to `bold`, then the value. Mark German learner text with `lang: "de"`, Russian learner text with `lang: "ru"`, and Japanese text with `lang: "ja"`. Use only schema-supported `div`, `span`, `ol`, `ul`, and `li` tags and inline style; do not add a CSS file.
 
@@ -986,7 +990,7 @@ PYTHONPATH=src .venv/bin/translationctl \
   --config config.wadoku.xml.luna.toml retry '<batch id from the report>'
 ```
 
-WXR-FAIL-8 — Apply a manual sample correction only through `replace-target`. Its input JSON contains `unit_id`, scalar `target_text`, `actor`, and `reason`. The command reruns scalar and placeholder validation, writes the old value to `translation_canonicalization_history` with mapping source `manual-wadoku-qa`, updates the accepted target, hash, and acceptance method `manual` in one transaction, and writes an audit event.
+WXR-FAIL-8 — Use audited replacement only after it supports the new role-specific array/scalar contract. Validate hashes and tokens and retain old/new targets, actor and reason transactionally. Source/structural corrections use WPQ-E overlays, never raw XML edits.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py replace-target \
@@ -1020,14 +1024,18 @@ WXR-NONGOAL-5 — Do not pretend that a finite alias list covers every possible 
 
 ## WXR-ORDER — Required execution order
 
+WXR-ORDER-7 — Follow WPQ-D-3 for the next prompt, not an automatic v4 switch. Pilot 3 reused v3 translations and does not validate a newer prompt or production contract.
+
+WXR-ORDER-8 — Render protected XML fragments by node type, never by concatenating their plain text. Resolve reference IDs against the full source before export. Use Japanese headword search links and source kana readings; never print numeric IDs as references. Preserve abbreviation relations with an explicit label. A main reference alone does not prove inflection or justify merging. Keep template text in a separate block and usage badges scoped to their sense. Exclude source index numbers and media/navigation captions from glossary text while retaining them in the lossless source. Test nested references, missing targets, sense badges and source-only fields before release.
+
 WXR-ORDER-5 — Before any full translation run, integrate and test the pilot-v2 sense-level translation contract in production batching, validation, persistence, reuse hashes and export. Unrestricted equivalents within one sense form one glossary array; restricted or protected blocks remain separate. Never feed these arrays through the old scalar-only contract. Keep the original source tree lossless. The standalone pilot implementation is not evidence that the database workflow already supports this contract.
 
 WXR-ORDER-6 — Apply the lessons in `reports/wadoku_pilot_v2_review.md` before approving the pilot. Check noun versus verb wording, particle functions, conventional names, synonym deduplication and German idioms. Any future prompt revision must have a new version; keep v3 unchanged because completed pilot calls used it. Require an unseen sample to check these failure classes, not only the 22 manually corrected units. Keep article classification, child-sense merging, template expansion and native pronunciation checks as separate release gates; this pilot has not passed them.
 
-WXR-ORDER-1 — Run the read-only source acquisition in WXR-CMD-1. Implement WXR-FILES, run WXR-CMD-1A, complete the controlled labels, and pass the tests. Then run WXR-CMD-2 through WXR-CMD-4 and freeze the pilot with WXR-CMD-4P.
+WXR-ORDER-1 — After a later execution request, first implement and verify WPQ contracts on fixtures, reconcile historical WXR-CMD examples, then follow A through H in WPQ-ORDER. Do not run legacy commands with missing contracts.
 
-WXR-ORDER-2 — On the frozen pilot only, complete WXR-CMD-4G through WXR-CMD-4I, then WXR-CMD-4A through WXR-CMD-4C. Complete the pilot German export in WXR-CMD-5, exact reuse in WXR-CMD-6, and Russian pilot in WXR-CMD-7, WXR-CMD-8, and WXR-CMD-8B. Stop unless WXR-PILOT passes and the user approves proceeding.
+WXR-ORDER-2 — Preserve the frozen 150-entry regression core and version its supplement/dependencies. Complete metadata, grouping, lookup, examples, typed translation, semantic review and actual popup checks before pilot approval.
 
-WXR-ORDER-3 — After pilot approval, complete remaining article grouping, lookup resolution, and the full German export in WXR-CMD-8C. Then create remaining translation batches with WXR-CMD-8A and run WXR-CMD-9.
+WXR-ORDER-3 — Only after explicit pilot approval, apply the same reviewed stages to remaining source, including examples and risk review. Do not revert to scalar-only batches.
 
-WXR-ORDER-4 — Complete WXR-CMD-10 and WXR-CMD-11, then run WXR-SMOKE. Apply any correction through WXR-FAIL-8 and repeat export, verification, comparison, and smoke testing. After smoke passes, complete WXR-CMD-11A and WXR-CMD-12. Release only when all ten WXR-VAL gates pass and the release report contains the hashes and counts required by WXR-DONE-6.
+WXR-ORDER-4 — Release only after every active WXR-VAL and WPQ-GATES requirement passes and archives, logs, smoke and backup evidence are recorded. The old fixed count of ten gates is obsolete.

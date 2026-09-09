@@ -9,8 +9,10 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import quote
 
 from .util import canonical_json, sha256_bytes, sha256_file
+from .wadoku_quality import pronunciation_groups, pitch_group_sequence, usage_codes
 
 
 WADOKU_NAMESPACE = "http://www.wadoku.de/xml/entry"
@@ -295,6 +297,9 @@ def _controlled_labels(entry: ET.Element, output: Counter[tuple[str, str]]) -> N
             text = render_plain(element)
             if text:
                 output[("usage", f"{usage_type}:{text}")] += 1
+            for attr, value in element.attrib.items():
+                if attr != "type":
+                    output[("usage", f"@{attr}:{value}")] += 1
         elif tag == "orth":
             if "type" in element.attrib:
                 output[("orthography", element.attrib["type"])] += 1
@@ -498,7 +503,7 @@ def _labeled_div(label: str, content: list[Any]) -> dict[str, Any]:
     return {"tag": "div", "content": [_span(label + ": ", bold=True), *content]}
 
 
-def _block_spans(block: dict[str, Any], target: str, language: str) -> list[dict[str, Any]]:
+def _block_spans(block: dict[str, Any], target: str, language: str, render_fragment=None) -> list[dict[str, Any]]:
     fragments = {item["placeholder"]: item for item in block["protected_fragments"]}
     expected = list(fragments)
     if PLACEHOLDER_RE.findall(target) != expected:
@@ -508,7 +513,8 @@ def _block_spans(block: dict[str, Any], target: str, language: str) -> list[dict
     for match in PLACEHOLDER_RE.finditer(target):
         if match.start() > position:
             result.append(_span(target[position:match.start()], language))
-        result.append(_span(fragments[match.group()]["text"]))
+        fragment = fragments[match.group()]
+        result.extend(render_fragment(fragment["tree"]) if render_fragment else [_span(fragment["text"])])
         position = match.end()
     if position < len(target):
         result.append(_span(target[position:], language))
@@ -517,16 +523,46 @@ def _block_spans(block: dict[str, Any], target: str, language: str) -> list[dict
 
 def _render_reference(
     node: dict[str, Any], labels: dict[tuple[str, str], dict[str, Any]], language: str,
+    reference_targets: dict[str, dict[str, str]] | None = None,
+    *, inline: bool = False,
 ) -> dict[str, Any]:
     ref_type = node["attributes"].get("type", "")
     key = f"{node['tag']}:type:{ref_type}"
     kind = _localized_label(labels, "reference", key, language, ref_type or node["tag"])
-    target = " ".join(filter(None, [
-        "#" + node["attributes"].get("id", "") if node["attributes"].get("id") else "",
-        *(_plain_tree(item) for item in _tree_descendants(node, "jap")),
-        *(_plain_tree(item) for item in _tree_descendants(node, "transcr")),
-    ]))
-    return _labeled_div(kind, [_span(target, "ja" if _tree_descendants(node, "jap") else None)])
+    resolved = (reference_targets or {}).get(node["attributes"].get("id", ""), {})
+    japanese = [_plain_tree(item) for item in _tree_descendants(node, "jap")]
+    target = resolved.get("expression") or next(iter(japanese), "")
+    if not target:
+        raise ValueError(f"Unresolved Wadoku reference: {node['attributes']}")
+    if any(mark in target for mark in "…~〜～"):
+        raise ValueError(f"Unresolved Wadoku reference template: {target}")
+    reading = resolved.get("reading", "")
+    content = [{"tag": "a", "href": "?query=" + quote(target, safe=""), "lang": "ja", "content": target}]
+    if reading and reading != target:
+        content.append(_span(f"【{reading}】", "ja"))
+    if ref_type == "main":
+        kind = "Связанная статья" if language == "ru" else "Verwandter Eintrag"
+    return {"tag": "span", "content": content} if inline else _labeled_div(kind, content)
+
+
+def reference_target_index(source: Path) -> dict[str, dict[str, str]]:
+    """Resolve source IDs against all entries, including those outside a pilot."""
+    result = {}
+    context = ET.iterparse(source, events=("start", "end"))
+    _, root = next(context)
+    for event, element in context:
+        if event != "end" or local_name(element.tag) != "entry":
+            continue
+        form = next((c for c in element if local_name(c.tag) == "form"), None)
+        if form is not None:
+            orths = [n for n in form.iter() if local_name(n.tag) == "orth"]
+            selected = [n for n in orths if n.attrib.get("midashigo") != "true"] or orths
+            reading = next((render_plain(n) for n in form.iter() if local_name(n.tag) == "hira"), "")
+            if selected:
+                result[element.attrib["id"]] = {"expression": render_plain(selected[0]), "reading": reading}
+        element.clear()
+        root.clear()
+    return result
 
 
 def sense_translation_entry(value: dict[str, Any]) -> dict[str, Any]:
@@ -574,8 +610,10 @@ def structured_entry(
     omitted_paths = {path for block in blocks for path in block.get("member_paths", [])[1:]}
     rendered_block_indices: set[int] = set()
     tree = value["tree"]
+    reference_targets = value.get("reference_targets", {})
     form = next((child for child in tree["children"] if child["tag"] == "form"), None)
     senses = [child for child in tree["children"] if child["tag"] == "sense"]
+    sense_filter = set(value.get("sense_filter", range(1, len(senses) + 1)))
     if form is None or not senses:
         raise ValueError(f"Wadoku entry {value['entry_id']} lacks form or sense")
 
@@ -599,20 +637,42 @@ def structured_entry(
                     raise ValueError("glossary_set requires nonempty string array")
                 return [{"tag": "span", "data": {"content": "glossary"},
                          "lang": language, "content": "; ".join(items)}]
+            def render_fragment(fragment):
+                if fragment["tag"] in {"ref", "sref"}:
+                    return [_render_reference(fragment, labels, language, reference_targets, inline=True)]
+                return render_node(fragment, "")
+            rendered = _block_spans(block, target, language, render_fragment)
+            if block["role"] == "etymology":
+                original = dict((p, n) for n, p in _tree_paths(tree))[path]
+                if _tree_descendants(original, "abbrev"):
+                    rendered = [part for item in rendered for part in (
+                        item["content"][1:] if item.get("tag") == "div" else [item]
+                    )]
+                    rendered = [_span("Сокр. от: " if language == "ru" else "Kurz für: "), *rendered]
             return [{"tag": "div", "data": {"content": block["role"]},
-                     "content": _block_spans(block, target, language)}]
+                     "content": rendered}]
         tag = node["tag"]
+        if tag in {"accent", "hatsuon", "romaji"}:
+            return []  # Native pronunciation owns these nodes, never glossary text.
         if tag == "usg":
-            usage_type = node["attributes"].get("type", "")
-            raw_text = _plain_tree(node)
-            code = f"{usage_type}:{raw_text}"
-            content = (
-                [_span(_localized_label(labels, "usage", code, language), language)]
-                if raw_text else []
-            )
-            return [{"tag": "span", "style": {"fontStyle": "italic"}, "content": [*content, " · "]}]
+            codes = usage_codes(node)
+            return [{"tag": "span", "data": {"content": "sense-tag"},
+                     "style": {"fontSize": "0.8em", "fontWeight": "bold", "borderStyle": "solid",
+                               "borderWidth": "1px", "borderRadius": "0.25em", "padding": "0.1em 0.3em", "marginRight": "0.4em"},
+                     "content": [_span(_localized_label(labels, "usage", code, language), language)]}
+                    for code in codes]
+        if tag == "transcr":
+            resolution = value.get("transcription_resolutions", {}).get(_plain_tree(node))
+            if not resolution:
+                raise ValueError(f"Unresolved Japanese transcription: {_plain_tree(node)}")
+            return [_span(resolution, "ja")]
         if tag in {"ref", "sref"}:
-            return [_render_reference(node, labels, language)]
+            return [_render_reference(node, labels, language, reference_targets)]
+        if tag in {"steinhaus", "ruigos", "ruigo", "wikide", "wikija", "link"}:
+            # Source navigation/media identifiers are not dictionary definitions.
+            return []
+        if tag in {"jap", "orth", "hira"}:
+            return [_span(_plain_tree(node), "ja")]
         rendered: list[Any] = []
         if node["text"]:
             rendered.append(_span(node["text"], language))
@@ -627,25 +687,41 @@ def structured_entry(
 
     sense_items = []
     for sense_index, sense in enumerate(senses, 1):
+        if sense_index not in sense_filter:
+            continue
+        sense_content = render_node(sense, f"/entry[1]/sense[{sense_index}]") or [_span("")]
+        if sense["attributes"].get("related") == "true":
+            sense_content.insert(0, _span("Связанное значение: " if language == "ru" else "Verwandte Bedeutung: "))
         sense_items.append({
             "tag": "li",
-            "content": render_node(sense, f"/entry[1]/sense[{sense_index}]") or [_span("")],
+            "data": {"sense": str(sense_index), "related": sense["attributes"].get("related", "false")},
+            "content": sense_content,
         })
     # Headwords, readings, grammar tags and pitch are already native Yomitan data.
     content = [{"tag": "ol", "content": sense_items}] if len(sense_items) > 1 else sense_items[0]["content"]
     templates = list(dict.fromkeys(_plain_tree(n) for n in _tree_descendants(form, "orth")
                                   if "…" in _plain_tree(n) and n["attributes"].get("midashigo") != "true"))
     if templates:
-        content = [_span(" · ".join(templates), "ja"), *content]
+        content = [_labeled_div("Шаблон" if language == "ru" else "Muster", [_span(" · ".join(templates), "ja")]), *content]
     totals: Counter[str] = Counter()
+    entry_labels = []
     for child in tree["children"]:
         totals[child["tag"]] += 1
         if child is form or child in senses or child["tag"] == "gramGrp":
             continue
         path = f"/entry[1]/{child['tag']}[{totals[child['tag']]}]"
-        content.extend(render_node(child, path))
-    if rendered_block_indices != set(range(len(blocks))):
-        missing = sorted(set(range(len(blocks))) - rendered_block_indices)
+        if child["tag"] == "usg":
+            entry_labels.extend(render_node(child, path))
+        else:
+            content.extend(render_node(child, path))
+    if entry_labels:
+        content.insert(0, {"tag": "div", "data": {"content": "entry-tags"}, "content": entry_labels})
+    expected_indices = {i for i, block in enumerate(blocks)
+                        if block["sense_path"] is None or any(
+                            block["sense_path"] == f"/entry[1]/sense[{n}]" or
+                            block["sense_path"].startswith(f"/entry[1]/sense[{n}]/") for n in sense_filter)}
+    if rendered_block_indices != expected_indices:
+        missing = sorted(expected_indices - rendered_block_indices)
         raise ValueError(f"Wadoku blocks were not rendered: {value['entry_id']}:{missing[:10]}")
     return {"type": "structured-content", "content": {"tag": "div", "content": content}}
 
@@ -682,24 +758,37 @@ def yomitan_rows(
     labels: dict[tuple[str, str], dict[str, Any]], targets: dict[int, str] | None = None,
 ) -> tuple[list[list[Any]], list[list[Any]]]:
     _expression, reading, sequence = canonical_identity(value)
-    glossary = [structured_entry(value, language, labels, targets)]
     grammar = [_localized_label(labels, "grammar", child["tag"], language).replace(" ", "‑") for group in _tree_descendants(value["tree"], "gramGrp")
                for child in group["children"]]
     inflection_rules = yomitan_inflection_rules(value)
-    accents = []
-    for node in _tree_descendants(value["tree"], "accent"):
-        text = _plain_tree(node)
-        if text.isdigit():
-            accents.append({"position": int(text)})
+    pronunciation = pronunciation_groups(value)
+    if pronunciation["issues"]:
+        raise ValueError(f"Unresolved pronunciation for {sequence}: {pronunciation['issues']}")
     rows: list[list[Any]] = []
     metadata: list[list[Any]] = []
+    groups = pronunciation["groups"]
+    all_accents = []
+    for group in groups:
+        group_value = {**value, "sense_filter": group["sense_indices"]}
+        glossary = [structured_entry(group_value, language, labels, targets)]
+        group_sequence = sequence if len(groups) == 1 else pitch_group_sequence(sequence, group["sense_indices"])
+        if len(groups) > 1:
+            glossary[0]["content"]["content"].insert(0, _labeled_div(
+                "Ударение этой статьи" if language == "ru" else "Akzent dieses Eintrags",
+                [_span(", ".join(str(p["position"]) for p in group["pitches"]))]))
+        for form in _entry_forms(value):
+            expression = _plain_tree(form)
+            term_tags = [_localized_label(labels, "orthography", form["attributes"]["type"], language).replace(" ", "‑")] if form["attributes"].get("type") else []
+            rows.append([expression, reading, " ".join(dict.fromkeys(grammar)), inflection_rules, 0,
+                         glossary, group_sequence, " ".join(term_tags)])
+        for pitch in group["pitches"]:
+            if pitch not in all_accents:
+                all_accents.append(pitch)
+    # Yomitan pitch banks are keyed by expression/reading, not sequence. Keep
+    # native variants and make the group restriction explicit in each article.
     for form in _entry_forms(value):
-        expression = _plain_tree(form)
-        term_tags = [_localized_label(labels, "orthography", form["attributes"]["type"], language).replace(" ", "‑")] if form["attributes"].get("type") else []
-        rows.append([expression, reading, " ".join(dict.fromkeys(grammar)), inflection_rules, 0,
-                     glossary, sequence, " ".join(term_tags)])
-        if accents:
-            metadata.append([expression, "pitch", {"reading": reading, "pitches": accents}])
+        if all_accents:
+            metadata.append([_plain_tree(form), "pitch", {"reading": reading, "pitches": all_accents}])
     return rows, metadata
 
 
@@ -756,7 +845,7 @@ def build_rich_archive(
     *, language: str, labels: dict[tuple[str, str], dict[str, Any]], license_text: bytes,
     title: str, revision: str, source_url: str, source_sha256: str,
     export_audit_id: int | str, description_note: str | None = None,
-    row_factory=None,
+    row_factory=None, reference_targets: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     index = {
         "title": title, "revision": revision, "format": 3, "sequenced": True,
@@ -776,6 +865,8 @@ def build_rich_archive(
     term_bank_number = meta_bank_number = 0
     term_buffer: list[list[Any]] = []
     meta_buffer: list[list[Any]] = []
+    scoped_pitch_tags: set[str] = set()
+    sequence_owners: dict[int, int] = {}
 
     def write(archive: zipfile.ZipFile, name: str, data: bytes) -> None:
         _write_zip_member(archive, name, data)
@@ -789,9 +880,20 @@ def build_rich_archive(
             write(archive, f"tag_bank_{tag_bank_number}.json",
                   canonical_json(tags[offset:offset + 10_000]))
         for value, targets in entries:
+            if reference_targets is not None:
+                value = {**value, "reference_targets": reference_targets}
             rows, metadata = (row_factory or yomitan_rows)(value, language, labels, targets)
+            for row in rows:
+                owner = sequence_owners.setdefault(row[6], value["entry_id"])
+                if owner != value["entry_id"]:
+                    raise ValueError(f"Yomitan sequence collision: {row[6]}")
             term_buffer.extend(rows)
             meta_buffer.extend(metadata)
+            for _term, kind, payload in metadata:
+                if kind == "pitch":
+                    scoped_pitch_tags.update(tag for pitch in payload["pitches"]
+                                             for tag in pitch.get("tags", [])
+                                             if tag.startswith("wdx-sense-"))
             entry_count += 1
             term_count += len(rows)
             meta_count += len(metadata)
@@ -811,6 +913,13 @@ def build_rich_archive(
         if meta_buffer:
             meta_bank_number += 1
             write(archive, f"term_meta_bank_{meta_bank_number}.json", canonical_json(meta_buffer))
+        scope_tags = [[tag, "usage", 0,
+                       ("значение " if language == "ru" else "Bedeutung ") + tag.removeprefix("wdx-sense-"), 0]
+                      for tag in sorted(scoped_pitch_tags, key=lambda s: int(s.removeprefix("wdx-sense-")))]
+        for offset in range(0, len(scope_tags), 10_000):
+            tag_bank_number += 1
+            write(archive, f"tag_bank_{tag_bank_number}.json", canonical_json(scope_tags[offset:offset + 10_000]))
+        tags.extend(scope_tags)
     if term_count == 0:
         raise ValueError("Wadoku rich archive has no term rows")
     return {

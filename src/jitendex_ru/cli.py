@@ -49,6 +49,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init-db")
+    wadoku_quality = commands.add_parser("record-wadoku-quality")
+    wadoku_quality.add_argument("--run-id", type=int, required=True)
+    wadoku_quality.add_argument("--input", type=Path, required=True)
     commands.add_parser("acquire")
     commands.add_parser("import-sources")
     approved_tags = commands.add_parser("import-approved-tags")
@@ -331,13 +334,18 @@ def _validation_report(connection, run_id: int) -> dict[str, Any]:
         """SELECT COUNT(*) FROM batch b WHERE b.run_id=? AND b.unit_count !=
         (SELECT COUNT(*) FROM batch_item bi WHERE bi.batch_id=b.id)""", (run_id,)
     ).fetchone()[0]
-    return {
+    report = {
         "run_id": run_id, "units": total, "accepted_units": accepted, "reviewed_units": reviewed,
         "blocking_issues": blocking, "batch_membership_mismatches": batch_mismatches,
         "release_ready": total > 0 and accepted == total
         and (not review_required or reviewed == total)
         and blocking == 0 and batch_mismatches == 0,
     }
+    if run["pipeline_version"].startswith("wadoku-xml-"):
+        from .wadoku_quality import database_quality_report
+        report["quality"] = database_quality_report(connection, run_id)
+        report["release_ready"] = report["release_ready"] and report["quality"]["release_ready"]
+    return report
 
 
 def execute(args: argparse.Namespace) -> Any:
@@ -543,6 +551,12 @@ def execute(args: argparse.Namespace) -> Any:
             return result
         if args.command == "validate":
             return _validation_report(connection, _active_run(connection, args.run_id))
+        if args.command == "record-wadoku-quality":
+            from .wadoku_quality import record_quality_review
+            result = record_quality_review(connection, args.run_id,
+                                           json.loads(args.input.read_text(encoding="utf-8")))
+            connection.commit()
+            return result
         if args.command == "verify-run-identity":
             result = source_identity_report(connection, args.run_id, args.baseline_run_id)
             if not result["passed"]:

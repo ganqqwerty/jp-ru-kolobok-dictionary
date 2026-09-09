@@ -34,6 +34,7 @@ from jitendex_ru.wadoku_xml import (
     translation_unit_id,
     yomitan_rows,
     sense_translation_entry,
+    reference_target_index,
 )
 
 
@@ -41,6 +42,7 @@ SOURCE = Path("work/wadoku-xml/source/wadoku-xml-20260705/wadoku.xml")
 LICENSE = Path("work/wadoku-xml/source/wadoku-xml-20260705/LICENSE")
 KAISHI = Path("work/downloads/kaishi-1.5k-v2.4.1.apkg")
 OUTPUT = Path("work/wadoku-xml/pilot-v2")
+EXPORT_OUTPUT = Path("work/wadoku-xml/pilot-v3")
 SCHEMA_DIR = Path("schemas/yomitan-77e200428902abf4fa48284df92da7af3dcb4162")
 PROMPT = Path("prompts/translate_luna_wadoku_xml_ru_v3.txt")
 LABELS = Path("terminology/wadoku-xml-labels-v1.json")
@@ -280,6 +282,10 @@ def _envelope(value: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
             "source_sha256": source_hash, "role": block["role"],
             "source_text": block["prompt_text"],
             "protected_tokens": [item["placeholder"] for item in block["protected_fragments"]],
+            "protected_fragment_context": [
+                {"token": item["placeholder"], "tree": item["tree"]}
+                for item in block["protected_fragments"]
+            ],
             "local_context": {
                 "unit_role": block["role"], "xml_path": block["xml_path"],
                 "sense_path": block["sense_path"],
@@ -307,6 +313,8 @@ def _envelope(value: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
 
 
 def prepare_batches(source: Path, selection_path: Path, batch_dir: Path) -> dict[str, Any]:
+    if any(batch_dir.glob("wadoku-pilot-*.json")):
+        raise ValueError("Refusing to overwrite frozen manifests; choose a new --work-dir")
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     envelopes = [_envelope(value, record) for value, record in _selected_entries(source, selection)]
     active = [envelope for envelope in envelopes if envelope["units"]]
@@ -361,6 +369,15 @@ def _dispatch(manifest_path: Path, response_path: Path, prompt: str) -> dict[str
 def translate(batch_dir: Path, response_dir: Path, prompt_path: Path, concurrency: int) -> dict[str, Any]:
     response_dir.mkdir(parents=True, exist_ok=True)
     prompt = prompt_path.read_text(encoding="utf-8")
+    prompt_hash = sha256_bytes(prompt.encode())
+    provenance_path = response_dir / "prompt-provenance.json"
+    if provenance_path.exists():
+        if json.loads(provenance_path.read_text())["sha256"] != prompt_hash:
+            raise ValueError("Prompt changed; use a new --work-dir")
+    elif any(response_dir.glob("wadoku-pilot-*.json")):
+        raise ValueError("Existing responses lack prompt provenance; do not mix them with a new run")
+    else:
+        atomic_write(provenance_path, canonical_json({"path": str(prompt_path), "sha256": prompt_hash}))
     manifests = sorted(batch_dir.glob("wadoku-pilot-*.json"))
     results = []
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -463,9 +480,11 @@ def export(source: Path, selection_path: Path, batch_dir: Path, response_dir: Pa
     if issues:
         raise ValueError(f"translation validation found {len(issues)} issues")
     labels = label_catalog(LABELS)
+    reference_targets = reference_target_index(source)
     prepared = []
     aliases: dict[str, list[str]] = {}
     for value, _record in _selected_entries(source, selection):
+        value = {**value, "reference_targets": reference_targets}
         block_targets = {}
         for index, block in enumerate(value["blocks"]):
             if block["has_translatable_text"]:
@@ -483,8 +502,8 @@ def export(source: Path, selection_path: Path, batch_dir: Path, response_dir: Pa
 
     report = build_rich_archive(
         entries(), output, language="ru", labels=labels, license_text=LICENSE.read_bytes(),
-        title="Wadoku RU · пилот 2",
-        revision="2026.07.05-wadoku-rich-ru-pilot150-v2",
+        title="Wadoku RU · пилот 3",
+        revision="2026.07.05-wadoku-rich-ru-pilot150-v3",
         source_url="https://www.wadoku.de/", source_sha256=WADOKU_ARCHIVE_SHA256,
         export_audit_id="standalone-pilot", description_note="Пилот из 150 статей для проверки качества.",
         row_factory=lambda value, *_args: rows_by_id[value["entry_id"]],
@@ -575,7 +594,7 @@ def build_site(selection_path: Path, archive: Path, site_dir: Path) -> dict[str,
         + render_preview(row[5]) + '</details>' for row in review_rows) + '</section>')
     page_html = f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Wadoku pilot 150 — Yomitan test</title><style>
 body{{font:17px/1.55 system-ui,sans-serif;max-width:1050px;margin:auto;padding:32px;color:#18202a;background:#f5f7fa}}header,section{{background:white;border:1px solid #d9e0e8;border-radius:14px;padding:20px;margin:16px 0}}h1{{margin-top:0}}h2{{font-size:1.15rem}}small{{color:#637083}}.scan{{font-size:1.55rem;line-height:2.2;word-break:keep-all}}a.button{{display:inline-block;background:#1769e0;color:white;padding:10px 16px;border-radius:9px;text-decoration:none}}code{{background:#edf1f5;padding:2px 5px}}</style></head><body>
-<header><h1>Wadoku: пилот 2 · 150 статей</h1><p><a class="button" href="{archive.name}">Скачать Yomitan ZIP</a></p><p>Отключите старый пилот и импортируйте новый ZIP в Yomitan. Затем наведите курсор на слова ниже с зажатой клавишей Yomitan.</p><p>Главная проверка форм: <span class="scan" lang="ja">知る　知らない　知らない人</span>. Для <code>知らない</code> Yomitan должен открыть статью <code>知る</code>. Для <code>知らない人</code> должна открыться отдельная статья.</p><p>Проверяйте перевод, разделение значений, формы, чтение, ударение, пометы, ссылки и примеры.</p></header>
+<header><h1>Wadoku: пилот 3 · 150 статей</h1><p><a class="button" href="{archive.name}">Скачать Yomitan ZIP</a></p><p>Отключите старый пилот и импортируйте новый ZIP в Yomitan. Затем наведите курсор на слова ниже с зажатой клавишей Yomitan.</p><p>Главная проверка форм: <span class="scan" lang="ja">知る　知らない　知らない人</span>. Для <code>知らない</code> Yomitan должен открыть статью <code>知る</code>. Для <code>知らない人</code> должна открыться отдельная статья.</p><p>Проверяйте перевод, разделение значений, формы, чтение, ударение, пометы, ссылки и примеры.</p></header>
 {''.join(sections)}
 </body></html>'''
     (site_dir / "index.html").write_text(page_html, encoding="utf-8")
@@ -588,12 +607,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("select", "prepare", "translate", "export", "site", "all"))
     parser.add_argument("--concurrency", type=int, default=5)
+    parser.add_argument("--work-dir", type=Path, default=OUTPUT)
+    parser.add_argument("--export-dir", type=Path, default=EXPORT_OUTPUT)
+    parser.add_argument("--prompt", type=Path, default=PROMPT)
     args = parser.parse_args()
     selection_path = Path("work/wadoku-xml/pilot/pilot-selection.json")
-    batch_dir = OUTPUT / "batches"
-    response_dir = OUTPUT / "responses"
-    archive = OUTPUT / "wadoku-jp-ru-rich-pilot-150.zip"
-    site_dir = OUTPUT / "site"
+    batch_dir = args.work_dir / "batches"
+    response_dir = args.work_dir / "responses"
+    archive = args.export_dir / "wadoku-jp-ru-rich-pilot-150.zip"
+    site_dir = args.export_dir / "site"
     result: dict[str, Any] = {}
     if args.command in {"select", "all"}:
         if selection_path.exists():
@@ -603,7 +625,7 @@ def main() -> int:
     if args.command in {"prepare", "all"}:
         result["batches"] = prepare_batches(SOURCE, selection_path, batch_dir)
     if args.command in {"translate", "all"}:
-        result["translation"] = translate(batch_dir, response_dir, PROMPT, args.concurrency)
+        result["translation"] = translate(batch_dir, response_dir, args.prompt, args.concurrency)
     if args.command in {"export", "all"}:
         result["export"] = export(SOURCE, selection_path, batch_dir, response_dir, archive)
     if args.command in {"site", "all"}:
