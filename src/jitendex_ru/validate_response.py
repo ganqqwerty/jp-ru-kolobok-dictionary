@@ -308,6 +308,30 @@ def wadoku_scientific_source(unit: dict[str, Any]) -> bool:
     ) for path in selected)
 
 
+def wadoku_redundant_source_echo(unit, target):
+    """Reject only a copied lexical gloss beside Russian, not all Latin text."""
+    if unit.get('role') != 'glossary_set' or wadoku_scientific_source(unit):
+        return []
+    if unit.get('protected_tokens') or not isinstance(target, list):
+        return []
+    words = {w.casefold() for w in re.findall(r'\b[A-Za-zÀ-ž]{3,}\b', unit['source_text']) if not w.isupper()}
+    found = []
+    for item in target:
+        if not isinstance(item, str) or not re.search(r'[А-Яа-яЁё]', item):
+            continue
+        fragments = []
+        for parenthesis in re.findall(r'\(([^()]+)\)', item):
+            if re.fullmatch(r'[A-Za-zÀ-ž,; /-]+', parenthesis):
+                candidates = re.findall(r'\b[A-Za-zÀ-ž]{3,}\b', parenthesis)
+                if candidates and all(w.casefold() in words for w in candidates):
+                    fragments.extend(candidates)
+        prefix = re.match(r'^([A-Za-zÀ-ž]{3,})\s*[—–:]', item)
+        if prefix:
+            fragments.append(prefix[1])
+        found.extend(w for w in fragments if w.casefold() in words and not w.isupper())
+    return list(dict.fromkeys(found))
+
+
 def wadoku_target_issues(
     source_text: str, target: Any, protected: list[str], unit_id: str | None = None,
     *, allow_exact_source: bool = False, scientific_source: bool = False,
@@ -583,11 +607,14 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
     ).fetchall()
     required_targets: dict[str, str] = {}
     scientific_units: set[str] = set()
+    strict_units = {}
     manifest_path = Path(batch["manifest_path"])
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for article in manifest.get("articles", []):
             for unit in article.get("units", []):
+                if article.get('read_only_context', {}).get('versions', {}).get('schema') == 'rich-v4':
+                    strict_units[unit['unit_id']] = unit
                 if wadoku_scientific_source(unit):
                     scientific_units.add(unit['unit_id'])
                 required = unit.get("required_terminology")
@@ -645,6 +672,9 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         if item.get("confidence") != "high" and not item.get("review_reason"):
             issues.append({"code": "missing_review_reason", "unit_id": source["id"]})
         target = item.get("target_text")
+        echo = wadoku_redundant_source_echo(strict_units.get(source['id'], {}), target)
+        if echo:
+            issues.append({'code': 'redundant_source_echo', 'unit_id': source['id'], 'fragments': echo})
         required_target = required_targets.get(source["id"])
         # Approved whole-leaf terminology is strong generation guidance, but
         # an intermediate JPDB batch is not rejected solely for varying from

@@ -1,5 +1,7 @@
 """Freeze a deterministic 100-entry stress sample; selection is not classification."""
 import json
+import argparse
+import copy
 import re
 import xml.etree.ElementTree as ET
 from collections import Counter
@@ -23,10 +25,32 @@ def scan(path):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--repeat-from', type=Path)
+    parser.add_argument('--revision')
+    parser.add_argument('--output', type=Path, default=Path('work/wadoku-xml/focus100/scope.json'))
+    args = parser.parse_args()
     config = load_profile(Path("config.wadoku.rich.luna.toml"))
     from psycopg.conninfo import conninfo_to_dict
     if conninfo_to_dict(config.database_url()).get("dbname") != "wadoku_rich_pilot":
         raise ValueError("isolated pilot PostgreSQL required")
+    if args.repeat_from:
+        if not args.revision or args.output.resolve() == args.repeat_from.resolve():
+            raise ValueError('repeat requires a revision and a separate output file')
+        data = repeat_scope(json.loads(args.repeat_from.read_text()), args.revision)
+        db = Database(config)
+        c = db.connect()
+        try:
+            baseline = data['manifest']['repeated_scope']
+            snapshot = c.execute('SELECT snapshot_id FROM wadoku_scope WHERE id=?', (baseline,)).fetchone()[0]
+            result = store_scope(c, snapshot, data)
+            c.commit()
+            atomic_write(args.output, canonical_json(data))
+            print(json.dumps(result))
+        finally:
+            c.close()
+            db.close()
+        return
     source = Path("work/wadoku-xml/source/wadoku-xml-20260705/wadoku.xml")
     digest = sha256_file(source)
     if digest != config.raw["source"]["xml_sha256"]:
@@ -87,11 +111,27 @@ def main():
         snapshot=c.execute("SELECT snapshot_id FROM wadoku_scope WHERE id=?",(old["manifest"]["scope_id"],)).fetchone()[0]
         result=store_scope(c,snapshot,data)
         c.commit()
-        atomic_write(Path("work/wadoku-xml/focus100/scope.json"),canonical_json(data))
+        atomic_write(args.output,canonical_json(data))
         print(json.dumps(result),flush=True)
     finally:
         c.close()
         db.close()
+
+
+def repeat_scope(original, revision):
+    """Repeat the frozen sources, not the random selection or old decisions."""
+    data = copy.deepcopy(original)
+    manifest = data['manifest']
+    baseline = manifest.pop('scope_id')
+    for entry in data['entries']:
+        if sha256_bytes(canonical_json(entry['source'])) != entry['source_sha256']:
+            raise ValueError('frozen source hash mismatch')
+    manifest.update(repeated_scope=baseline, repeat_revision=revision)
+    manifest['scope_id'] = sha256_bytes(canonical_json([manifest, [
+        (e['entry_id'], e['source_sha256']) for e in data['entries']]]))
+    if manifest['scope_id'] == baseline:
+        raise ValueError('repeat must have a new identity')
+    return data
 
 
 if __name__ == "__main__":

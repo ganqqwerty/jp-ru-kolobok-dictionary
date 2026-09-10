@@ -32,8 +32,8 @@ def main():
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--revalidate-entry', type=int)
     args=parser.parse_args()
-    if not 1<=args.limit<=10:
-        raise ValueError('choose a bounded window of 1–10 tasks')
+    if not 1<=args.limit<=100:
+        raise ValueError('choose a bounded window of 1–100 tasks')
     if not 1<=args.concurrency<=5:
         raise ValueError('pilot concurrency must be 1–5')
     if not 1<=args.context_budget<=128000:

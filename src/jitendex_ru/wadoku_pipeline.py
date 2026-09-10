@@ -384,6 +384,8 @@ def projection_envelope(article: Any, units: list[Any], projection: dict[str, An
                                  "sense_context": unit.pop("sense_context", None),
                                  "example_source_context": unit.pop("example_source_context", None),
                                  "member_paths": unit.get("member_paths", [])}
+        if 'grammatical_scope' in unit:
+            unit['local_context']['grammatical_scope'] = unit.pop('grammatical_scope')
         # The batcher may split only between complete meaning packets.
         unit["packet_id"] = unit.get("sense_path") or unit["semantic_id"]
         prepared.append(unit)

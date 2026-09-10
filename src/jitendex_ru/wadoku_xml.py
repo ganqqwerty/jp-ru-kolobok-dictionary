@@ -685,6 +685,10 @@ def structured_entry(
             if index in rendered_block_indices:
                 raise ValueError(f"Wadoku block rendered twice: {value['entry_id']}:{index}")
             rendered_block_indices.add(index)
+            if block.get('controlled_metadata'):
+                return [{'tag': 'span', 'data': {'content': 'sense-tag'},
+                         'style': {'fontSize': '0.8em', 'fontWeight': 'bold', 'marginRight': '0.4em'},
+                         'content': block['controlled_metadata'][language]}]
             target = block["prompt_text"] if language == "de" else targets.get(index)
             if target is None:
                 if block["has_translatable_text"]:

@@ -7,6 +7,7 @@ from typing import Any
 from .wadoku_pipeline import ownership_groups
 from .wadoku_xml import yomitan_rows, build_rich_archive, canonical_identity, literal_suffix_lookup
 from .wadoku_quality import TEMPLATE_RE
+from .wadoku_classification import fixed_template_alias
 
 
 class AssemblyError(ValueError):
@@ -30,6 +31,9 @@ def lookup_rows(rows, metadata, decision):
         for alias in aliases:
             if not alias.get('expression') or not alias.get('reading') or TEMPLATE_RE.search(alias['expression'] + alias['reading']):
                 raise ValueError('lookup alias is not a concrete expression/reading')
+            if alias.get('kind') in {'suffix_only', 'prefix_only'} and fixed_template_alias(
+                    row[0], row[1], alias['kind']) != (alias['expression'], alias['reading']):
+                raise ValueError('lookup alias loses fixed lexical material or reading alignment')
             mapped = copy.deepcopy(row)
             mapped[0], mapped[1] = alias['expression'], alias['reading']
             result.append(mapped)

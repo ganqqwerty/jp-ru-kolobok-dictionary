@@ -333,6 +333,13 @@ def record_quality_review(connection, run_id: int, ledger: dict[str, Any]) -> di
     return report
 
 
+CONTROLLED_GRAMMAR = {
+    'als N.': 'существительное',
+    'als Suff.': 'суффикс',
+    'Nominalsuff.': 'именной суффикс',
+}
+
+
 def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
                            examples: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Build a new contract without altering legacy raw blocks or unit IDs."""
@@ -340,8 +347,15 @@ def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
     required = {"labels", "morphology", "examples", "corrections", "prompt", "schema"}
     if set(versions) != required or not all(versions.values()):
         raise ValueError("projection requires every meaning-relevant version")
-    projected = sense_translation_entry(value)
+    projected = copy.deepcopy(sense_translation_entry(value))
     nodes = {path: node for node, path in tree_paths(value["tree"])}
+    if versions['schema'] == 'rich-v4':
+        for block in projected['blocks']:
+            if block['role'] != 'glossary_set' and not block['protected_fragments']:
+                label = CONTROLLED_GRAMMAR.get(block['prompt_text'].strip())
+                if label:
+                    block['controlled_metadata'] = {'ru': label, 'de': block['prompt_text']}
+                    block['has_translatable_text'] = False
     example_context = copy.deepcopy(examples or [])
     context = {
         "entry_id": value["entry_id"], "source_sha256": source_identity(value),
@@ -371,6 +385,13 @@ def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
             "protected_tokens": [f["placeholder"] for f in block["protected_fragments"]],
             "protected_fragment_context": copy.deepcopy(block["protected_fragments"]),
         })
+        if versions['schema'] == 'rich-v4':
+            units[-1]['grammatical_scope'] = [
+                {'source_path': other['xml_path'], 'source_text': other['prompt_text'],
+                 'label': other['controlled_metadata']['ru']}
+                for other in projected['blocks'] if other.get('controlled_metadata')
+                and other.get('sense_path') and scope
+                and (scope == other['sense_path'] or scope.startswith(other['sense_path'] + '/'))]
     paths = [path for block in projected["blocks"] for path in block.get("member_paths", [block["xml_path"]])]
     expected = [b["xml_path"] for b in value["blocks"]]
     if Counter(paths) != Counter(expected):

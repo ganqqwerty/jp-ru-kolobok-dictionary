@@ -196,7 +196,7 @@ def main():
                                             [e for d in decisions.values() for e in d['examples']])
             versions={'labels':sha256_file(Path('terminology/wadoku-xml-labels-v2.json')),
                 'morphology':'source-classification-v6','examples':'reviewed-full-context-v1',
-                'corrections':'source-preserved','prompt':sha256_file(prompt_path),'schema':'rich-v3'}
+                'corrections':'source-preserved','prompt':sha256_file(prompt_path),'schema':'rich-v4'}
             if args.candidate_scope:
                 versions['examples']='classifier-candidate-full-context-v1'
                 versions['morphology']='classification-sha256:'+sha256_bytes(canonical_json(

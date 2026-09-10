@@ -27,6 +27,8 @@ def main():
             FROM translation_unit tu JOIN article a ON a.id=tu.article_id
             LEFT JOIN LATERAL (SELECT * FROM translation WHERE run_id=tu.run_id AND unit_id=tu.id ORDER BY id DESC LIMIT 1) t ON true
             WHERE tu.run_id=? ORDER BY a.entry_ordinal,tu.json_pointer''',(args.run_id,)).fetchall()
+        if not rows or any(row['translation_id'] is None for row in rows):
+            raise ValueError('manual review requires a complete translated run')
         articles={}
         for row in rows:
             item=dict(row)
