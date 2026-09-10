@@ -628,7 +628,7 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for article in manifest.get("articles", []):
             for unit in article.get("units", []):
-                if article.get('read_only_context', {}).get('versions', {}).get('schema') in {'rich-v4', 'rich-v5', 'rich-v6'}:
+                if article.get('read_only_context', {}).get('versions', {}).get('schema') in {'rich-v4', 'rich-v5', 'rich-v6', 'rich-v7'}:
                     strict_units[unit['unit_id']] = unit
                 if wadoku_scientific_source(unit):
                     scientific_units.add(unit['unit_id'])

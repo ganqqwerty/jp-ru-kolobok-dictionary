@@ -641,6 +641,7 @@ def structured_entry(
     block_by_path = {block["xml_path"]: (index, block) for index, block in enumerate(blocks)}
     omitted_paths = {path for block in blocks for path in block.get("member_paths", [])[1:]}
     rendered_block_indices: set[int] = set()
+    seen_glosses: dict[str | None, set[str]] = {}
     tree = value["tree"]
     reference_targets = value.get("reference_targets", {})
     transcription_resolutions = {**source_transcription_resolutions(value),
@@ -698,8 +699,15 @@ def structured_entry(
                 items = json.loads(block["source_text"]) if language == "de" else target
                 if not isinstance(items, list) or not items or not all(isinstance(x, str) for x in items):
                     raise ValueError("glossary_set requires nonempty string array")
+                seen_glosses.setdefault(block.get('sense_path'), set()).update(
+                    ' '.join(x.split()).rstrip('.').casefold() for x in items)
                 return [{"tag": "span", "data": {"content": "glossary"},
                          "lang": language, "content": "; ".join(items)}]
+            if (language == 'ru' and block['role'] in {'definition','explanation'}
+                    and not block['protected_fragments'] and isinstance(target,str)
+                    and ' '.join(target.split()).rstrip('.').casefold()
+                    in seen_glosses.get(block.get('sense_path'), set())):
+                return []  # Exact duplicate in this sense only; keep the saved translation.
             def render_fragment(fragment):
                 if fragment['tag'] == 'transcr':
                     fragments = block['protected_fragments']

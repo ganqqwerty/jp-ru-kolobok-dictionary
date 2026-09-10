@@ -34,8 +34,8 @@ def main():
     parser.add_argument('--revalidate-entry', type=int)
     parser.add_argument('--event-log', type=Path)
     args=parser.parse_args()
-    if not 1<=args.limit<=100:
-        raise ValueError('choose a bounded window of 1–100 tasks')
+    if not 1<=args.limit<=200:
+        raise ValueError('choose a bounded window of 1–200 tasks')
     if not 1<=args.concurrency<=100:
         raise ValueError('pilot concurrency must be 1–100')
     if not 1<=args.context_budget<=128000:

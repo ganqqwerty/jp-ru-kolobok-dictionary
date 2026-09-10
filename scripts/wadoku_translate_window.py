@@ -192,8 +192,8 @@ def main():
         raise ValueError('candidate scope always includes the entire frozen pilot')
     if args.run_id is None and (not args.scope_id or (not args.entry_ids and not args.candidate_scope)):
         raise ValueError('new preparation requires --scope-id and --entry-ids')
-    if not 1 <= args.max_batches <= 100 or (args.entry_ids and not 1 <= len(args.entry_ids) <= 10):
-        raise ValueError('choose 1–100 batches, or 1–10 diagnostic entries')
+    if not 1 <= args.max_batches <= 200 or (args.entry_ids and not 1 <= len(args.entry_ids) <= 10):
+        raise ValueError('choose 1–200 batches, or 1–10 diagnostic entries')
     if not 1 <= args.concurrency <= 100:
         raise ValueError('concurrency must be 1–100')
     if args.articles_per_batch is not None and (not 1 <= args.articles_per_batch <= 100 or args.run_id is not None):
@@ -268,7 +268,7 @@ def main():
                                             [e for d in decisions.values() for e in d['examples']])
             versions={'labels':sha256_file(Path('terminology/wadoku-xml-labels-v2.json')),
                 'morphology':'source-classification-v6','examples':'reviewed-full-context-v1',
-                'corrections':'source-preserved','prompt':sha256_file(prompt_path),'schema':'rich-v6'}
+                'corrections':'source-preserved','prompt':sha256_file(prompt_path),'schema':'rich-v7'}
             if args.candidate_scope:
                 versions['examples']='classifier-candidate-full-context-v1'
                 versions['morphology']='classification-sha256:'+sha256_bytes(canonical_json(

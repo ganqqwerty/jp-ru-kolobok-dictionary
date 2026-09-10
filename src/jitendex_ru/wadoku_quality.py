@@ -378,10 +378,10 @@ def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
         raise ValueError("projection requires every meaning-relevant version")
     projected = copy.deepcopy(sense_translation_entry(value))
     nodes = {path: node for node, path in tree_paths(value["tree"])}
-    if versions['schema'] in {'rich-v4', 'rich-v5', 'rich-v6'}:
+    if versions['schema'] in {'rich-v4', 'rich-v5', 'rich-v6', 'rich-v7'}:
         for block in projected['blocks']:
             if block['role'] != 'glossary_set' and not block['protected_fragments']:
-                catalog = CONTROLLED_GRAMMAR_V5 if versions['schema'] in {'rich-v5', 'rich-v6'} else CONTROLLED_GRAMMAR
+                catalog = CONTROLLED_GRAMMAR_V5 if versions['schema'] in {'rich-v5', 'rich-v6', 'rich-v7'} else CONTROLLED_GRAMMAR
                 label = catalog.get(block['prompt_text'].strip())
                 if label:
                     block['controlled_metadata'] = {'ru': label, 'de': block['prompt_text']}
@@ -415,22 +415,30 @@ def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
             "protected_tokens": [f["placeholder"] for f in block["protected_fragments"]],
             "protected_fragment_context": copy.deepcopy(block["protected_fragments"]),
         })
-        if versions['schema'] in {'rich-v4', 'rich-v5', 'rich-v6'}:
+        if versions['schema'] in {'rich-v4', 'rich-v5', 'rich-v6', 'rich-v7'}:
             units[-1]['grammatical_scope'] = [
                 {'source_path': other['xml_path'], 'source_text': other['prompt_text'],
                  'label': other['controlled_metadata']['ru']}
                 for other in projected['blocks'] if other.get('controlled_metadata')
                 and other.get('sense_path') and scope
                 and (scope == other['sense_path'] or scope.startswith(other['sense_path'] + '/'))]
-        if versions['schema'] in {'rich-v5', 'rich-v6'}:
+        if versions['schema'] in {'rich-v5', 'rich-v6', 'rich-v7'}:
             units[-1].update(lexical_contract(nodes, scope, member_paths, block['prompt_text']))
-        if versions['schema'] == 'rich-v6':
+        if versions['schema'] in {'rich-v6', 'rich-v7'}:
             japanese = next((n['text'] for p,n in nodes.items() if p.endswith('/orth[1]')), '')
             sentence = any(n['tag'] == 'ref' and n.get('attributes', {}).get('subentrytype') == 'XSatz'
                            for n in nodes.values()) or japanese.rstrip().endswith(('。', '！', '？'))
             units[-1].update(japanese=japanese, task_type=(
                 'sentence_translation' if sentence and block['role'] == 'glossary_set'
                 else 'definition' if block['role'] == 'glossary_set' else 'explanatory_note'))
+        if versions['schema'] == 'rich-v7':
+            from .wadoku_xml import canonical_identity
+            japanese,reading,_ = canonical_identity(value)
+            units[-1].update(japanese=japanese, reading=reading,
+                separate_notes=[{'role':b['role'],'text':b['prompt_text']} for b in projected['blocks']
+                                if b['sense_path']==scope and b['role']!='glossary_set' and b is not block],
+                displayed_usage=[plain(n) or n.get('attributes',{}) for p,n in nodes.items()
+                                 if n['tag']=='usg' and scope and p.startswith(scope+'/')])
     paths = [path for block in projected["blocks"] for path in block.get("member_paths", [block["xml_path"]])]
     expected = [b["xml_path"] for b in value["blocks"]]
     if Counter(paths) != Counter(expected):

@@ -12,6 +12,8 @@ def summarize(directory):
     invocations = {}
     attempts = {}
     for path in sorted(Path(directory).glob('*.jsonl')):
+        if path.name.endswith('.events.jsonl'):
+            continue  # Raw CLI streams, e.g. the selector, are not command journals.
         for number, line in enumerate(path.read_text().splitlines(), 1):
             row = json.loads(line)
             if 'invocation_id' not in row:

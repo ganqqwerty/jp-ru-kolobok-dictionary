@@ -39,21 +39,23 @@ def main():
     try:
         with db.connect() as c:
             count = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=?',(args.scope_id,)).fetchone()[0]
-        if count != 100:
-            raise ValueError('repeat requires exactly 100 frozen source entries')
+        if count not in {100,200}:
+            raise ValueError('repeat requires exactly 100 or 200 frozen source entries')
         for attempt in range(1, 4):
             with db.connect() as c:
                 missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',(args.scope_id,)).fetchone()[0]
             if not missing:
                 break
             stage(f'classification-pass{attempt}', ['scripts/wadoku_classify_window.py', '--scope-id', args.scope_id,
-                '--limit', '100', '--concurrency', str(args.concurrency), '--context-budget', '128000',
+                '--limit', str(count), '--concurrency', str(args.concurrency), '--context-budget', '128000',
                 '--work-dir', str(args.work_dir / 'classification'), '--event-log', str(args.work_dir / 'classification.jsonl')])
         with db.connect() as c:
             missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',(args.scope_id,)).fetchone()[0]
-        event('classification_coverage', total=100, unresolved=missing)
+        event('classification_coverage', total=count, unresolved=missing)
+        if missing:
+            raise RuntimeError(f'{missing} entries still need classification; see classification logs')
         stage('translation', ['scripts/wadoku_translate_window.py', '--scope-id', args.scope_id,
-            '--candidate-scope', '--unclassified-source-only', '--max-batches', '100',
+            '--candidate-scope', '--max-batches', str(count),
             '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '128000',
             '--event-log', str(args.work_dir / 'translation.jsonl')])
         event('pipeline_finished', scope_id=args.scope_id, classification_unresolved=missing,

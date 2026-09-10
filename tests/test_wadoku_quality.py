@@ -22,6 +22,16 @@ def source(body, *, form=None, entry_id=1):
 LABELS = label_catalog(Path('terminology/wadoku-xml-labels-v2.json'))
 
 
+def test_exact_note_duplicate_is_hidden_only_within_same_sense():
+    from jitendex_ru.wadoku_xml import sense_translation_entry
+    value=sense_translation_entry(source('<sense><trans><tr>Stück</tr></trans><def>Zählwort</def></sense>'
+                                        '<sense><trans><tr>anderes</tr></trans><def>Zählwort</def></sense>'))
+    targets={i: (['счётное слово'] if b['role']=='glossary_set' and i==0 else
+                 ['другое'] if b['role']=='glossary_set' else 'Счётное слово.') for i,b in enumerate(value['blocks'])}
+    result=json.dumps(structured_entry(value,'ru',LABELS,targets),ensure_ascii=False)
+    assert result.count('Счётное слово.') == 1
+
+
 def test_v6_sentence_task_is_explicit_without_changing_output_role():
     value = source('<sense><trans><tr>Es war mein Wunsch.</tr></trans></sense>'
                    '<ref type="main" subentrytype="XSatz" id="2"/>',
@@ -33,6 +43,15 @@ def test_v6_sentence_task_is_explicit_without_changing_output_role():
     assert unit['japanese'] == '私の願いであった。'
     versions['schema'] = 'rich-v5'
     assert 'task_type' not in translation_projection(value, versions=versions)['units'][0]
+
+
+def test_v7_supplies_lookup_spelling_and_separate_note_context():
+    value=source('<sense><trans><tr>Stück</tr></trans><def>Zählwort</def></sense>',
+        form='<form><orth midashigo="true">×帖</orth><orth>帖</orth><reading><hira>ちょう</hira></reading></form>')
+    versions=dict(labels='test',morphology='test',examples='test',corrections='test',prompt='test',schema='rich-v7')
+    unit=translation_projection(value,versions=versions)['units'][0]
+    assert unit['japanese']=='帖' and unit['reading']=='ちょう'
+    assert unit['separate_notes']==[{'role':'definition','text':'Zählwort'}]
 
 
 def test_pitch_scope_and_duplicates_are_preserved_without_glossary_digits():
