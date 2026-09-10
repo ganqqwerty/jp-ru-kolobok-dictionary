@@ -1122,9 +1122,14 @@ def build_site(
             tag = node.get('tag', 'div')
             if tag not in {'div', 'span', 'ol', 'ul', 'li', 'ruby', 'rt'}:
                 tag = 'span'
-            return f'<{tag}>' + render_preview(node.get('content', '')) + f'</{tag}>'
+            attrs = ''.join(f' data-sc-{html.escape(str(key), quote=True)}="{html.escape(str(value), quote=True)}"'
+                            for key, value in node.get('data', {}).items())
+            if node.get('lang'):
+                attrs += f' lang="{html.escape(node["lang"], quote=True)}"'
+            return f'<{tag}{attrs}>' + render_preview(node.get('content', '')) + f'</{tag}>'
         return ''
     with zipfile.ZipFile(archive) as zipped:
+        archive_css = zipped.read('styles.css').decode('utf-8') if 'styles.css' in zipped.namelist() else ''
         rows = [row for name in zipped.namelist() if name.startswith('term_bank_')
                 for row in json.loads(zipped.read(name))]
     unique = {}
@@ -1144,6 +1149,8 @@ body{{font:17px/1.55 system-ui,sans-serif;max-width:1050px;margin:auto;padding:3
 <header><h1>Wadoku: пилот {pilot_number} · {pilot_date} · {selection['entry_count']} новых статей</h1><p><a class="button" href="{archive.name}">Скачать Yomitan ZIP</a></p><p>Отключите старый пилот и импортируйте новый ZIP в Yomitan. Затем наведите курсор на слова ниже с зажатой клавишей Yomitan.</p><p>Проверяйте перевод, разделение значений, все формы, чтение, словоформы, ударение, пометы, ссылки и примеры.</p></header>
 {''.join(sections)}
 </body></html>'''
+    page_html = page_html.replace('</head>', '<link rel="stylesheet" href="styles.css"></head>')
+    (static_dir / "styles.css").write_text(archive_css, encoding="utf-8")
     (static_dir / "index.html").write_text(page_html, encoding="utf-8")
     report = {"site": str((static_dir / "index.html").resolve()), "archive": str(destination.resolve()), "sections": {k: len(v) for k, v in by_category.items()}}
     atomic_write(site_dir / "site-report.json", canonical_json(report) + b"\n")

@@ -88,6 +88,9 @@ def _article_envelope(
     evidence: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     source = json.loads(article["raw_json"])
+    if units and str(units[0]["json_pointer"]).startswith("/projection/units/"):
+        from .wadoku_pipeline import load_projection, projection_envelope
+        return projection_envelope(article, units, load_projection(connection, units[0]["run_id"], article["id"]))
     if (
         isinstance(source, dict) and source.get("schema_version") == 1
         and source.get("namespace") == "http://www.wadoku.de/xml/entry"
@@ -195,6 +198,8 @@ def _uses_lexicographer(articles: list[dict[str, Any]]) -> bool:
 
 
 def _manifest_pipeline(articles: list[dict[str, Any]]) -> str:
+    if any(article.get("read_only_context", {}).get("pipeline") == "wadoku-xml-v3" for article in articles):
+        return "wadoku-xml-v3"
     if any(article.get("read_only_context", {}).get("dictionary") == "Wadoku" for article in articles):
         return "wadoku-xml-v2"
     if any(unit["role"] == DOJG_ROLE for article in articles for unit in article["units"]):
@@ -259,8 +264,12 @@ def _pack_envelopes(
                 continue
             base = {**envelope, "units": []}
             current_units: list[dict[str, Any]] = []
+            packets: dict[str, list[dict[str, Any]]] = {}
             for unit in envelope["units"]:
-                candidate_units = [*current_units, unit]
+                packets.setdefault(unit.get("packet_id", unit["unit_id"]), []).append(unit)
+            for packet in packets.values():
+                unit = packet[0]
+                candidate_units = [*current_units, *packet]
                 candidate = {**base, "units": candidate_units}
                 _, exact = _manifest("b-" + "0" * 24, [candidate], terminology)
                 if (len(exact) > hard_max_article_bytes
@@ -271,11 +280,11 @@ def _pack_envelopes(
                             "exceeds a hard article limit"
                         )
                     expanded.append({**base, "units": current_units})
-                    current_units = [unit]
+                    current_units = packet
                     _, exact = _manifest(
                         "b-" + "0" * 24, [{**base, "units": current_units}], terminology,
                     )
-                    if len(exact) > hard_max_article_bytes:
+                    if len(exact) > hard_max_article_bytes or len(current_units) > hard_max_article_units:
                         raise ValueError(
                             f"unit {unit['unit_id']} in article {envelope['article_id']} "
                             "exceeds a hard article limit"
@@ -372,7 +381,7 @@ def make_batches(
     ).fetchone()
     if run is None:
         raise ValueError(f"unknown run: {run_id}")
-    wadoku = run["pipeline_version"] == "wadoku-xml-v2"
+    wadoku = run["pipeline_version"] in {"wadoku-xml-v2", "wadoku-xml-v3"}
     snapshot_id = run["dictionary_snapshot_id"] or run["jitendex_snapshot_id"]
     tag_catalog = None if wadoku else _approved_tag_catalog(connection, snapshot_id)
     grouped: dict[int, list[RowLike]] = defaultdict(list)
@@ -484,7 +493,7 @@ def claim(
 ) -> dict[str, str] | None:
     import uuid
 
-    if kind not in {"translation", "review"}:
+    if kind not in {"translation", "review", "classification"}:
         raise ValueError(f"unsupported batch kind: {kind}")
     if transport not in {"responses-sync", "batch-api", "codex-agent"}:
         raise ValueError(f"unsupported transport: {transport}")
@@ -651,13 +660,18 @@ def _retry_or_split_locked(
         groups = [articles[:midpoint], articles[midpoint:]]
     else:
         units = articles[0]["units"]
-        if len(units) < 2:
+        packets: dict[str, list[dict[str, Any]]] = {}
+        for unit in units:
+            packets.setdefault(unit.get("packet_id", unit["unit_id"]), []).append(unit)
+        if len(packets) < 2:
             connection.execute("UPDATE batch SET state='blocked' WHERE id=?", (batch_id,))
-            audit(connection, "block", "batch", batch_id, {"reason": "singleton unit exhausted retries"})
+            audit(connection, "block", "batch", batch_id, {"reason": "indivisible meaning packet exhausted retries"})
             return {"batch_id": batch_id, "requeued": False, "split": False, "blocked": True}
-        midpoint = len(units) // 2
+        packet_list = list(packets.values())
+        midpoint = len(packet_list) // 2
         groups = []
-        for subset in (units[:midpoint], units[midpoint:]):
+        for half in (packet_list[:midpoint], packet_list[midpoint:]):
+            subset = [unit for packet in half for unit in packet]
             article = dict(articles[0])
             article["units"] = subset
             groups.append([article])

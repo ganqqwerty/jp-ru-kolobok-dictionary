@@ -247,6 +247,8 @@ def build_output_schema(manifest: dict[str, Any], kind: str) -> dict[str, Any]:
                 "replacement_target": {"anyOf": [_target_schema(unit["role"]), {"type": "null"}]},
                 "reason": {"type": ["string", "null"]},
             }
+            if manifest.get('pipeline') == 'wadoku-xml-v3':
+                properties['reason'] = {'type': 'string', 'minLength': 1}
         items.append({
             "type": "object", "additionalProperties": False,
             "required": list(properties), "properties": properties,
@@ -272,6 +274,7 @@ def dispatch_one(
     on_launch: Callable[[float], None] | None = None,
     executable: Path = CODEX,
     request_timeout_seconds: float | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> DispatchResult:
     manifest_text = Path(item["request_path"]).read_text(encoding="utf-8")
     manifest = json.loads(manifest_text)
@@ -281,7 +284,7 @@ def dispatch_one(
         dir="/private/tmp", delete=False,
     )
     try:
-        json.dump(build_output_schema(manifest, kind), schema_file, ensure_ascii=False)
+        json.dump(output_schema if output_schema is not None else build_output_schema(manifest, kind), schema_file, ensure_ascii=False)
         schema_file.close()
         schema_path = Path(schema_file.name)
     except Exception:

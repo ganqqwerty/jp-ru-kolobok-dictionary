@@ -1,0 +1,13 @@
+{
+  "scope_id": "a159ede6979b17ddd63ab0aefcaa1ce36ef8750c66746ac6e082adba39d64ea2",
+  "entry_id": 1836351,
+  "attempt_id": "att-f60675ebacf74855b5889790d48375f0",
+  "reviewer": "main-thread-source-review",
+  "note": "Read both complete source XML entries. Parent 9652262 already includes Abtrünnigkeit, Treuebruch and Verrat. The child explicitly has main/subentrytype=suru. Preserve all child verb meanings in the shared article and retain direct lookup spellings; this review does not claim a successful Yomitan deinflection test.",
+  "corrections": {
+    "article_policy": "inherit_parent",
+    "lookup_policy": "shared_direct",
+    "parent_id": 9652262,
+    "reason": "The suru verb realizes meanings already present in the parent noun. Shared ownership must preserve the child's verb glosses and direct lookup forms."
+  }
+}

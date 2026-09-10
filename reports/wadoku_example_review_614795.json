@@ -1,0 +1,17 @@
+{
+  "scope_id": "a159ede6979b17ddd63ab0aefcaa1ce36ef8750c66746ac6e082adba39d64ea2",
+  "entry_id": 614795,
+  "attempt_id": "att-7cb844eb3ce8429fa43fab3e0acd9292",
+  "reviewer": "main-thread-source-review",
+  "note": "WCR-7: checked selected child meanings and parent sense definitions. Preserve the selected expressions; correct valuation and appreciation attachments.",
+  "corrections": {
+    "aefec5b8f3d2c0c5fa24c38f70bf6588": {
+      "sense_path": "/entry[1]/sense[4]",
+      "reason": "jmds. Leistung würdigen corresponds to Würdigung in parent sense 4."
+    },
+    "810e7024723e439073d2ab4c5d6c92ef": {
+      "sense_path": "/entry[1]/sense[2]",
+      "reason": "auf zehn Millionen geschätztes Haus is a monetary valuation, matching parent sense 2."
+    }
+  }
+}

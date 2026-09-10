@@ -1,0 +1,8 @@
+{
+  "scope_id": "71c1b53cd6556d7848de3d0b9b83b179b31e1392cb4501c9e733d221fa8c43db",
+  "entry_id": 3903063,
+  "attempt_id": "att-6d77478a485749caac6cee66cdad5eec",
+  "reviewer": "main-thread-source-review",
+  "note": "Checked all three available example candidates against source text. 規則にはずれている, 道にはずれた行ない and 道理にはずれている all express deviation from a norm and correctly attach to sense 4. No examples for other senses are invented.",
+  "corrections": {}
+}

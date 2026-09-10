@@ -1,0 +1,13 @@
+{
+  "scope_id": "a159ede6979b17ddd63ab0aefcaa1ce36ef8750c66746ac6e082adba39d64ea2",
+  "entry_id": 627246,
+  "attempt_id": "att-7ef6917eddef4975939ed4332650c312",
+  "reviewer": "main-thread-source-review",
+  "note": "WCR-8: ordinary adjective collocations are preferable to a protected book title as usage examples. Keep the weather and success examples; exclude the title without changing its independent source entry.",
+  "corrections": {
+    "40c981a192531876ebde49899b73f2b8": {
+      "state": "reject",
+      "reason": "The selected source block is a protected book title, not an ordinary translated usage example."
+    }
+  }
+}

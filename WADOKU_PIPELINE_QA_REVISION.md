@@ -2,11 +2,13 @@
 
 WPQ-1 — This document is the required implementation and orchestration contract after `reports/wadoku_pilot_manual_problems.md`. It covers WPM-P01 through WPM-P30. It takes precedence over older conflicting rebuild-plan details. It is a specification, not a claim that the current commands implement these gates.
 
-WPQ-2 — Execution is on hold by user instruction. Do not dispatch Luna, prepare or overwrite manifests, migrate a database, export a dictionary, or resume a run as part of this update. A later explicit execution request is required. Existing ZIPs, source XML, accepted translations and prompt versions remain unchanged.
+WPQ-2 — The user lifted the execution hold on 2026-09-10 for implementation and a 150–200-entry PostgreSQL pilot, including Luna translation, validation and new prompt versions. This does not authorize full-dictionary translation. Preserve historical ZIPs, raw source, attempts and prompt versions. See WRI for actual progress.
+
+WPQ-3 — The later WOA-WINDOW and WOA-GATE rules replace conflicting approval requirements here. Analyze each bounded window, but do not request user approval for routine continuation or repairs within the authorized scope. Keep three shared readiness barriers and one summary report. Do not require 30 new manual signatures or a user signature on every pilot check; actual semantic and Yomitan checks still apply.
 
 ## WPQ-ORDER — Required stage order
 
-WPQ-ORDER-1 — A: inventory the lossless source and build typed metadata plus forward and reverse references. B: decide lexical grouping and lookup aliases. C: select linked examples and reference dependencies. D: build versioned sense translation units and their complete context. E: translate with Luna CLI. F: validate contracts and review meaning. G: assemble and validate both archives. H: test actual Yomitan behavior and obtain pilot approval. No later stage may silently supply missing decisions from an earlier stage.
+WPQ-ORDER-1 — A: inventory the lossless source and build typed metadata plus forward and reverse references. B: decide lexical grouping and lookup aliases. C: select linked examples and reference dependencies. D: build versioned sense translation units and their complete context. E–F: translate with Luna CLI in bounded windows, validate each response, then analyze errors and a sample of successful translations before the next window. Repair and recheck affected results within the authorized scope without routine user approval. G: assemble and validate both archives. H: test actual Yomitan behavior and record the orchestrator's pilot review; ask the user only under WOA-WINDOW-6 or an explicit personal-approval requirement. No later stage may silently supply missing decisions from an earlier stage.
 
 WPQ-ORDER-2 — Before A runs on production data, implement and test the contracts below with small fixtures. Reconcile database schema, manifest schema, response validation, acceptance, manual replacement, reuse, exporter and reporting together. Bump affected versions and freeze a new run identity. Do not point the old scalar pipeline at a newer prompt and call that an upgrade.
 
@@ -62,13 +64,13 @@ WPQ-FORMAL-1 — The orchestrator must run this gate before it reports a pilot e
 
 WPQ-FORMAL-2 — Require one reviewed decision for every example candidate linked to a selected parent article. The allowed decisions are `accept` and `reject`. Each decision must keep parent ID, child ID, relation path, source hash, reviewer and reason. Require `candidate_count = accepted_decision_count + rejected_decision_count` and zero unresolved candidates. A reviewed exclusion is a rejection with a reason, not a missing decision.
 
-WPQ-FORMAL-3 — Require at most 5 accepted examples per parent article. Allow 6 or 7 only with a stored review override and reason. Reject templates, duplicate Japanese text and duplicate parent-child-relation identities unless a reviewed rule explicitly makes them distinct.
+WPQ-FORMAL-3 — Use the same limit as WPQ-C-3: at most three examples per parent, with a reasoned override up to five. Reject unexpanded templates, duplicate Japanese text and duplicate parent-child-relation identities unless a reviewed rule explicitly makes them distinct. An override within this rule does not need a separate user approval.
 
 WPQ-FORMAL-4 — Require every accepted example to have immutable Japanese text, reading, source relation, source translation path and one `example_translation` unit. Require one accepted Russian result with matching unit ID, source hash and context hash. Empty, missing, scalar-contract-mismatched or reused-without-exact-context translations fail the gate.
 
 WPQ-FORMAL-5 — Scan the built Yomitan ZIP, not an intermediate render. Require exactly one structured example container for every accepted example and no container without an accepted decision. Each container must appear under the intended parent and reviewed sense or article scope. It must contain separate `ja` and `ru` content, preserve the Japanese text and reading, and match the accepted Russian translation.
 
-WPQ-FORMAL-6 — Require `accepted_example_count = translated_example_unit_count = exported_example_container_count`. Require zero missing pairs, duplicates, wrong-parent attachments, wrong-sense attachments, unapproved containers and silent losses. Store the exact identities and counts in a machine-readable report tied to the selection hash, manifest hashes and ZIP SHA-256.
+WPQ-FORMAL-6 — Compare exact example identities and attachments, not only total counts. One logical example may appear in several spelling rows or applicable pitch groups; derive that allowed multiplicity explicitly. Require zero missing pairs, unintended duplicates, wrong-parent or wrong-sense attachments, unapproved containers and silent losses. Store the identities and measured counts in the summary report tied to selection, manifests and ZIP SHA-256.
 
 WPQ-FORMAL-7 — The export command must stop with a nonzero result when any formal example check fails. It must not label the artifact complete and must not publish or replace the review site. The orchestrator reports `FAIL — examples stage missing` when candidate parents exist but the decision, translation or archive stages are absent.
 
@@ -112,7 +114,7 @@ WPQ-GATES-2 — Expand the frozen 150-entry regression set with an explicitly ve
 
 WPQ-GATES-3 — Record Yomitan/browser versions, archive hashes, primary dictionary, grouping mode and enabled dictionaries. Test full phrases from their first character, suffix lookup, spelling variants, inflections, exact-reading/general-search links, example rendering, pitch scope and devoicing. Manual popup evidence is required; a HTML preview or ZIP schema check cannot stand in for it.
 
-WPQ-GATES-4 — Give each WPM-P01–P30 a status: open, fixed-with-evidence, or reviewed-limitation. Store responsible stage, regression case and evidence path. None starts as fixed merely because it appears in this plan. All meaning-changing P1 defects and unresolved source/lookup decisions block release. User approval of the new pilot remains mandatory before full-run preparation or dispatch.
+WPQ-GATES-4 — Track WPM-P01–P30 in the issue list and automate reproducible regressions. None starts as fixed merely because it appears in this plan. Do not require 30 fresh manual approvals per run. Meaning-changing P1 defects and unresolved source/lookup decisions block the affected release. Full-run preparation or dispatch requires authorization for that scope; the current authorization covers only 150–200 entries. An already authorized transition does not require a duplicate user approval.
 
 WPQ-GATES-5 — A renderer-only repair reuses accepted translations only if their projection/context contract is unchanged. Contract, example or prompt changes require a new run and measured reuse. Re-export only after a later execution request. Keep old pilot archives and reports for comparison; do not edit ZIP contents in place.
 

@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from .util import canonical_json, sha256_bytes, sha256_file
 from .wadoku_quality import pronunciation_groups, pitch_group_sequence, usage_codes
+from .wadoku_styles import EXAMPLE_CSS
 
 
 WADOKU_NAMESPACE = "http://www.wadoku.de/xml/entry"
@@ -532,17 +533,29 @@ def _render_reference(
     resolved = (reference_targets or {}).get(node["attributes"].get("id", ""), {})
     japanese = [_plain_tree(item) for item in _tree_descendants(node, "jap")]
     target = resolved.get("expression") or next(iter(japanese), "")
+    reading = resolved.get("reading", "")
+    suffix = literal_suffix_lookup(target, reading)
+    if suffix:
+        target, reading = suffix
     if not target:
         raise ValueError(f"Unresolved Wadoku reference: {node['attributes']}")
     if any(mark in target for mark in "…~〜～"):
         raise ValueError(f"Unresolved Wadoku reference template: {target}")
-    reading = resolved.get("reading", "")
     content = [{"tag": "a", "href": "?query=" + quote(target, safe=""), "lang": "ja", "content": target}]
     if reading and reading != target:
         content.append(_span(f"【{reading}】", "ja"))
     if ref_type == "main":
         kind = "Связанная статья" if language == "ru" else "Verwandter Eintrag"
     return {"tag": "span", "content": content} if inline else _labeled_div(kind, content)
+
+
+def literal_suffix_lookup(expression: str, reading: str) -> tuple[str, str] | None:
+    """A literal leading-slot suffix, never a guessed complete expression."""
+    if (expression.startswith('…') and reading.startswith('…')
+            and re.fullmatch(r'[\u3040-\u30ff\u3400-\u9fffー]+', expression[1:])
+            and re.fullmatch(r'[\u3041-\u3096\u30a1-\u30faー]+', reading[1:])):
+        return expression[1:], reading[1:]
+    return None
 
 
 def reference_target_index(source: Path) -> dict[str, dict[str, str]]:
@@ -597,6 +610,25 @@ def sense_translation_entry(value: dict[str, Any]) -> dict[str, Any]:
                                 for block in value["blocks"] if block["xml_path"] not in omitted]}
 
 
+def source_transcription_resolutions(value: dict[str, Any]) -> dict[str, str]:
+    """Resolve only romanizations explicitly paired with Japanese in this entry."""
+    candidates: dict[str, set[str]] = {}
+    normalize = lambda text: re.sub(r'[~·･]', '', text).strip()
+    for parent, _ in _tree_paths(value['tree']):
+        transcriptions = [n for n in parent['children'] if n['tag'] == 'transcr']
+        japanese = [n for n in parent['children'] if n['tag'] == 'jap']
+        # Adjacent pairs also work in an explanation with other Japanese words.
+        for index, node in enumerate(parent['children'][:-1]):
+            following = parent['children'][index + 1]
+            if node['tag'] == 'transcr' and following['tag'] == 'jap' and not node['tail'].strip():
+                candidates.setdefault(normalize(_plain_tree(node)), set()).add(_plain_tree(following))
+        if len(transcriptions) == len(japanese) == 1:
+            candidates.setdefault(normalize(_plain_tree(transcriptions[0])), set()).add(_plain_tree(japanese[0]))
+    return {_plain_tree(node): next(iter(candidates[key]))
+            for node, _ in _tree_paths(value['tree']) if node['tag'] == 'transcr'
+            for key in [normalize(_plain_tree(node))] if len(candidates.get(key, set())) == 1}
+
+
 def structured_entry(
     value: dict[str, Any], language: str,
     labels: dict[tuple[str, str], dict[str, Any]],
@@ -611,11 +643,38 @@ def structured_entry(
     rendered_block_indices: set[int] = set()
     tree = value["tree"]
     reference_targets = value.get("reference_targets", {})
+    transcription_resolutions = {**source_transcription_resolutions(value),
+                                 **value.get('transcription_resolutions', {})}
     form = next((child for child in tree["children"] if child["tag"] == "form"), None)
     senses = [child for child in tree["children"] if child["tag"] == "sense"]
     sense_filter = set(value.get("sense_filter", range(1, len(senses) + 1)))
     if form is None or not senses:
         raise ValueError(f"Wadoku entry {value['entry_id']} lacks form or sense")
+
+    examples_by_sense: dict[str | None, list[Any]] = {}
+    valid_senses = {path for node, path in _tree_paths(tree) if node['tag'] == 'sense'}
+    example_ids = set()
+    for example in value.get('accepted_examples', []):
+        key = example['unit_id']
+        sense_path = example['sense_path']
+        if (key in example_ids or example['parent_id'] != value['entry_id']
+                or (sense_path is not None and sense_path not in valid_senses)):
+            raise ValueError('invalid example identity or parent sense')
+        example_ids.add(key)
+        target = example['source_text'] if language == 'de' else example['translation']
+        if not isinstance(target, str) or not target.strip() or not example['japanese'].strip():
+            raise ValueError('empty example sentence or translation')
+        translated = _block_spans({'protected_fragments': example['protected_fragment_context'],
+                                   'xml_path': example['source_path']}, target, language)
+        examples_by_sense.setdefault(sense_path, []).append({
+            'tag': 'div', 'data': {'class': 'extra-box', 'content': 'example-sentence', 'exampleId': key},
+            'content': [
+                {'tag': 'div', 'lang': 'ja', 'data': {'content': 'example-sentence-a'},
+                 'content': example['japanese']},
+                {'tag': 'div', 'lang': language, 'data': {'content': 'example-sentence-b'},
+                 'content': translated},
+            ],
+        })
 
     def render_node(node: dict[str, Any], path: str) -> list[Any]:
         if path in omitted_paths:
@@ -638,8 +697,18 @@ def structured_entry(
                 return [{"tag": "span", "data": {"content": "glossary"},
                          "lang": language, "content": "; ".join(items)}]
             def render_fragment(fragment):
+                if fragment['tag'] == 'transcr':
+                    fragments = block['protected_fragments']
+                    for left, right in zip(fragments, fragments[1:]):
+                        if (left['tree'] is fragment and not fragment['tail'].strip()
+                                and right['tree']['tag'] == 'jap'
+                                and transcription_resolutions.get(_plain_tree(fragment)) == _plain_tree(right['tree'])):
+                            return []  # The adjacent Japanese object renders it once.
                 if fragment["tag"] in {"ref", "sref"}:
                     return [_render_reference(fragment, labels, language, reference_targets, inline=True)]
+                paths = [p for n, p in _tree_paths(tree) if n == fragment and p.startswith(path + '/')]
+                if len(paths) == 1:
+                    return render_node(fragment, paths[0])
                 return render_node(fragment, "")
             rendered = _block_spans(block, target, language, render_fragment)
             if block["role"] == "etymology":
@@ -662,7 +731,7 @@ def structured_entry(
                      "content": [_span(_localized_label(labels, "usage", code, language), language)]}
                     for code in codes]
         if tag == "transcr":
-            resolution = value.get("transcription_resolutions", {}).get(_plain_tree(node))
+            resolution = value.get('transcription_path_resolutions', {}).get(path) or transcription_resolutions.get(_plain_tree(node))
             if not resolution:
                 raise ValueError(f"Unresolved Japanese transcription: {_plain_tree(node)}")
             return [_span(resolution, "ja")]
@@ -683,6 +752,8 @@ def structured_entry(
             rendered.extend(render_node(child, child_path))
             if child["tail"]:
                 rendered.append(_span(child["tail"], language))
+        if tag == 'sense':
+            rendered.extend(examples_by_sense.get(path, []))
         return rendered
 
     sense_items = []
@@ -699,6 +770,7 @@ def structured_entry(
         })
     # Headwords, readings, grammar tags and pitch are already native Yomitan data.
     content = [{"tag": "ol", "content": sense_items}] if len(sense_items) > 1 else sense_items[0]["content"]
+    content.extend(examples_by_sense.get(None, []))
     templates = list(dict.fromkeys(_plain_tree(n) for n in _tree_descendants(form, "orth")
                                   if "…" in _plain_tree(n) and n["attributes"].get("midashigo") != "true"))
     if templates:
@@ -847,6 +919,7 @@ def build_rich_archive(
     export_audit_id: int | str, description_note: str | None = None,
     row_factory=None, reference_targets: dict[str, dict[str, str]] | None = None,
     audit_label: str = "PostgreSQL export audit",
+    pipeline_version: str = WADOKU_PIPELINE,
 ) -> dict[str, Any]:
     index = {
         "title": title, "revision": revision, "format": 3, "sequenced": True,
@@ -854,7 +927,7 @@ def build_rich_archive(
         "attribution": "Wadoku.de; see bundled LICENSE and https://www.wadoku.de/wiki/display/WAD/Wadoku.de-Lizenz",
         "description": (
             f"Official Wadoku source 2026-07-05; archive SHA-256 {source_sha256}; "
-            f"pipeline {WADOKU_PIPELINE}; edition {revision}; {audit_label} {export_audit_id}."
+            f"pipeline {pipeline_version}; edition {revision}; {audit_label} {export_audit_id}."
             + (f" {description_note}" if description_note else "")
         ),
     }
@@ -877,6 +950,7 @@ def build_rich_archive(
     with zipfile.ZipFile(output, "w") as archive:
         write(archive, "index.json", canonical_json(index))
         write(archive, "LICENSE", license_text)
+        write(archive, "styles.css", EXAMPLE_CSS.encode("utf-8"))
         for tag_bank_number, offset in enumerate(range(0, len(tags), 10_000), 1):
             write(archive, f"tag_bank_{tag_bank_number}.json",
                   canonical_json(tags[offset:offset + 10_000]))

@@ -285,9 +285,32 @@ def target_storage(role: str, target: Any) -> str:
     return target
 
 
+def wadoku_scientific_source(unit: dict[str, Any]) -> bool:
+    """Trust scientific annotations only on every selected source member's ancestry."""
+    from .wadoku_quality import tree_paths
+    context = unit.get('local_context')
+    if not isinstance(context, dict):
+        return False
+    tree = context.get('example_source_context')
+    root = '/entry[1]'
+    if not tree:
+        tree = context.get('sense_context')
+        root = context.get('sense_path')
+    selected = unit.get('member_paths') or context.get('member_paths') or [unit.get('source_path')]
+    if not tree or not root or not selected or not all(isinstance(p, str) and p for p in selected):
+        return False
+    nodes = list(tree_paths(tree, root))
+    paths = {path for _, path in nodes}
+    return all(path in paths and any(
+        node.get('attributes', {}).get('langdesc') == 'scientific'
+        and (path == ancestor or path.startswith(ancestor + '/'))
+        for node, ancestor in nodes
+    ) for path in selected)
+
+
 def wadoku_target_issues(
     source_text: str, target: Any, protected: list[str], unit_id: str | None = None,
-    *, allow_exact_source: bool = False,
+    *, allow_exact_source: bool = False, scientific_source: bool = False,
 ) -> list[dict[str, Any]]:
     """Validate one Wadoku XML scalar with the worker-response rules."""
     neutral_residual = WADOKU_XML_PLACEHOLDER_RE.sub("", source_text).strip()
@@ -333,7 +356,7 @@ def wadoku_target_issues(
             or latin_term
             or single_latin_taxon
             or neutral_residual in WADOKU_XML_EXACT_FOREIGN_LABELS
-            or allow_exact_source
+            or allow_exact_source or scientific_source
         )
     )
     allowed_english = list(dict.fromkeys(
@@ -349,7 +372,7 @@ def wadoku_target_issues(
             *WADOKU_XML_ROMAN_NUMERAL_TOKEN_RE.findall(target),
             *wadoku_xml_foreign_tail_tokens(source_text),
         ]))
-    if allow_unchanged_neutral:
+    if allow_unchanged_neutral or scientific_source:
         allowed_english = list(dict.fromkeys(
             [*allowed_english, *ASCII_WORD_RE.findall(source_text)],
         ))
@@ -373,6 +396,26 @@ def wadoku_target_issues(
                 **({"unit_id": unit_id} if unit_id is not None else {}),
                 "expected": protected, "actual": actual_placeholders,
             })
+    return issues
+
+
+def wadoku_glossary_issues(source_text: str, target: Any, protected: list[str],
+                          unit_id: str) -> list[dict[str, Any]]:
+    """Validate a whole sense without imposing Jitendex's English-token rules."""
+    if (not isinstance(target, list) or not 1 <= len(target) <= 12
+            or not all(isinstance(item, str) and item.strip() for item in target)):
+        return [{"code": "invalid_glossary_set", "unit_id": unit_id}]
+    issues = []
+    if len(set(item.strip().casefold() for item in target)) != len(target):
+        issues.append({"code": "duplicate_glossary_definition", "unit_id": unit_id})
+    for index, item in enumerate(target):
+        tokens = WADOKU_XML_PLACEHOLDER_RE.findall(item)
+        issues.extend({**issue, "definition_index": index} for issue in
+                      wadoku_target_issues(source_text, item, tokens, unit_id))
+    actual = WADOKU_XML_PLACEHOLDER_RE.findall(" ".join(target))
+    if actual != protected:
+        issues.append({"code": "wadoku_placeholder_order_or_set_mismatch", "unit_id": unit_id,
+                       "expected": protected, "actual": actual})
     return issues
 
 
@@ -524,9 +567,9 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         "SELECT pipeline_version,extractor_version FROM run WHERE id=?", (batch["run_id"],),
     ).fetchone()
     wadoku_plain = run["extractor_version"] == "extractor-plain-glossary-v1"
-    wadoku_xml = run["pipeline_version"] == "wadoku-xml-v2"
+    wadoku_xml = run["pipeline_version"] in {"wadoku-xml-v2", "wadoku-xml-v3"}
     expected_schema = 2 if run["pipeline_version"] in {
-        "lexicographer-v2", "dojg-v1", "kanjidic-v1", "wadoku-xml-v2",
+        "lexicographer-v2", "dojg-v1", "kanjidic-v1", "wadoku-xml-v2", "wadoku-xml-v3",
     } else 1
     if payload.get("schema_version") != expected_schema:
         issues.append({"code": "wrong_schema_version"})
@@ -539,11 +582,14 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         WHERE bi.batch_id=? ORDER BY bi.ordinal""", (batch["id"],)
     ).fetchall()
     required_targets: dict[str, str] = {}
+    scientific_units: set[str] = set()
     manifest_path = Path(batch["manifest_path"])
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for article in manifest.get("articles", []):
             for unit in article.get("units", []):
+                if wadoku_scientific_source(unit):
+                    scientific_units.add(unit['unit_id'])
                 required = unit.get("required_terminology")
                 if isinstance(required, dict) and isinstance(required.get("target_text"), str):
                     required_targets[unit["unit_id"]] = required["target_text"]
@@ -552,11 +598,21 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         return issues + [{"code": "translations_not_array"}]
     actual_ids = [item.get("unit_id") for item in translations if isinstance(item, dict)]
     expected_ids = [row["id"] for row in expected]
+    if (run['pipeline_version'] == 'wadoku-xml-v3'
+            and len(actual_ids) == len(translations) == len(expected_ids)
+            and all(isinstance(unit_id, str) for unit_id in actual_ids)
+            and len(set(actual_ids)) == len(actual_ids)
+            and set(actual_ids) == set(expected_ids)):
+        # Identity and source hashes bind values; response array order does not.
+        # Keep the saved response intact and validate pairs in request order.
+        indexed = {item['unit_id']: item for item in translations}
+        translations = [indexed[unit_id] for unit_id in expected_ids]
+        actual_ids = expected_ids
     if actual_ids != expected_ids:
         issues.append({"code": "unit_order_or_set_mismatch", "expected": expected_ids, "actual": actual_ids})
         return issues
     wadoku_exact_source: set[str] = set()
-    if wadoku_xml:
+    if run["pipeline_version"] == "wadoku-xml-v2":
         article_ids = sorted({row["article_id"] for row in expected})
         placeholders = ",".join("?" for _ in article_ids)
         raw_by_article = {
@@ -595,6 +651,10 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         # it. One deterministic pass canonicalizes these leaves and structured
         # tags in the final cumulative run before the definitive export.
         if source["role"] == "glossary_set":
+            if wadoku_xml:
+                issues.extend(wadoku_glossary_issues(source["source_text"], target,
+                    json.loads(source["protected_tokens_json"]), source["id"]))
+                continue
             maximum_definitions = 32 if wadoku_plain else 12
             if not isinstance(target, list) or not 1 <= len(target) <= maximum_definitions:
                 issues.append({"code": "invalid_glossary_set", "unit_id": source["id"]})
@@ -682,6 +742,7 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
                 issues.extend(wadoku_target_issues(
                     source["source_text"], target, list(protected), source["id"],
                     allow_exact_source=source["id"] in wadoku_exact_source,
+                    scientific_source=source['id'] in scientific_units,
                 ))
             else:
                 for code in _plain_text_issues(

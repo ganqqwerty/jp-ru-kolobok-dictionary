@@ -11,17 +11,22 @@ from typing import Any
 from .batch import _article_envelope
 from .db import audit
 from .util import CYRILLIC_RE, TAG_RE, atomic_write, canonical_json, sha256_bytes
-from .validate_response import _plain_text_issues, allows_japanese_grammar_label, target_storage
+from .validate_response import (_plain_text_issues, allows_japanese_grammar_label, target_storage,
+                                wadoku_glossary_issues, wadoku_target_issues)
 
 
 def _review_manifest(batch_id: str, articles: list[dict[str, Any]]) -> tuple[dict[str, Any], bytes]:
+    wadoku = any(article.get('read_only_context', {}).get('pipeline') == 'wadoku-xml-v3'
+                 for article in articles)
     lexicographer = any(
         "preservation_inventory" in article.get("read_only_context", {})
         or any(unit["role"] == "glossary_set" for unit in article["units"])
         for article in articles
     )
-    payload = {"schema_version": 2 if lexicographer else 1, "batch_id": batch_id, "manifest_sha256": "", "target_language": "ru", "articles": articles}
-    if lexicographer:
+    payload = {"schema_version": 2 if lexicographer or wadoku else 1, "batch_id": batch_id, "manifest_sha256": "", "target_language": "ru", "articles": articles}
+    if wadoku:
+        payload['pipeline'] = 'wadoku-xml-v3'
+    elif lexicographer:
         payload["pipeline"] = "lexicographer-v2"
     digest = sha256_bytes(canonical_json(payload))
     payload["manifest_sha256"] = digest
@@ -55,25 +60,65 @@ def _split_review_envelope(
 def make_review_batches(
     connection: ConnectionLike, run_id: int, inbox: Path,
     max_articles: int = 6, max_bytes: int = 49152, max_units: int = 120,
+    review_prompt_sha256: str | None = None,
+    recheck: bool = False,
+    unresolved_only: bool = False,
+    article_ids: list[int] | None = None,
 ) -> dict[str, int]:
+    if unresolved_only:
+        recheck = True
+    if recheck:
+        run = connection.execute('SELECT pipeline_version FROM run WHERE id=?', (run_id,)).fetchone()
+        if not run or run[0] != 'wadoku-xml-v3' or not review_prompt_sha256:
+            raise ValueError('recheck requires rich Wadoku and an explicit review prompt')
+    selection = ('t.id=(SELECT MAX(t2.id) FROM translation t2 WHERE t2.run_id=t.run_id AND t2.unit_id=t.unit_id)'
+                 if recheck else 't.accepted=0 AND NOT EXISTS (SELECT 1 FROM review r WHERE r.translation_id=t.id)')
+    if unresolved_only:
+        selection += " AND t.accepted=0 AND EXISTS (SELECT 1 FROM review r WHERE r.translation_id=t.id AND r.decision='needs_adjudication')"
+        selection += " AND NOT EXISTS (SELECT 1 FROM review seen JOIN attempt done ON done.id=seen.attempt_id WHERE seen.translation_id=t.id AND done.prompt_sha256=?)"
+    parameters = [run_id, review_prompt_sha256] if unresolved_only else [run_id]
+    if article_ids is not None:
+        if (not recheck or not 1 <= len(article_ids) <= 10
+                or len(set(article_ids)) != len(article_ids)
+                or any(type(i) is not int or i <= 0 for i in article_ids)):
+            raise ValueError('article subset requires explicit recheck and 1–10 distinct article IDs')
+        marks = ','.join('?' for _ in article_ids)
+        present = {r[0] for r in connection.execute(
+            f'SELECT article_id FROM run_article WHERE run_id=? AND article_id IN ({marks})',
+            (run_id, *article_ids))}
+        if present != set(article_ids):
+            raise ValueError('review article subset is outside the run')
+        selection += f' AND tu.article_id IN ({marks})'
+        parameters.extend(article_ids)
     grouped: dict[int, list[RowLike]] = defaultdict(list)
     for row in connection.execute(
-        """SELECT tu.*,t.id translation_id,t.target_text,t.confidence,t.review_reason
+        f"""SELECT tu.*,t.id translation_id,t.target_text,t.confidence,t.review_reason
         FROM translation t JOIN translation_unit tu ON tu.id=t.unit_id
-        WHERE t.run_id=? AND t.accepted=0 AND NOT EXISTS (SELECT 1 FROM review r WHERE r.translation_id=t.id)
-        ORDER BY tu.article_id,tu.json_pointer""", (run_id,)
+        WHERE t.run_id=? AND {selection}
+        ORDER BY tu.article_id,tu.json_pointer""", tuple(parameters)
     ):
         grouped[row["article_id"]].append(row)
     article_rows = {row["id"]: row for row in connection.execute("SELECT * FROM article WHERE selected=1")}
     envelopes = []
     for article_id, units in sorted(grouped.items()):
         base = _article_envelope(connection, article_rows[article_id], units)
+        if base.get('read_only_context', {}).get('pipeline') == 'wadoku-xml-v3':
+            # Review requests are new artifacts even when the translation run
+            # froze an older envelope order (0, 1, 10, 11, 2, ...).
+            from .wadoku_pipeline import load_projection
+            projection = load_projection(connection, run_id, article_id)
+            order = {u['unit_id']: i for i, u in enumerate(projection['units'])}
+            base['units'].sort(key=lambda u: order[u['unit_id']])
         translations = {row["id"]: row for row in units}
         for unit in base["units"]:
             candidate = translations[unit["unit_id"]]
             unit["candidate_target"] = json.loads(candidate["target_text"]) if unit["role"] == "glossary_set" else candidate["target_text"]
             unit["candidate_confidence"] = candidate["confidence"]
             unit["candidate_review_reason"] = candidate["review_reason"]
+            if unresolved_only:
+                unit['prior_review_reasons'] = [r[0] for r in connection.execute(
+                    "SELECT reason FROM review WHERE translation_id=? AND decision='needs_adjudication' ORDER BY id",
+                    (candidate['translation_id'],))]
         envelopes.extend(_split_review_envelope(base, max_bytes, max_units))
 
     groups: list[list[dict[str, Any]]] = []
@@ -90,6 +135,7 @@ def make_review_batches(
     if current:
         groups.append(current)
 
+    created = 0
     for group in groups:
         identity = {"run_id": run_id, "candidates": [
             [unit["unit_id"], sha256_bytes(
@@ -99,8 +145,29 @@ def make_review_batches(
             )]
             for article in group for unit in article["units"]
         ]}
+        if review_prompt_sha256 is not None:
+            identity['review_prompt_sha256'] = review_prompt_sha256
+        if recheck:
+            identity['recheck'] = True
+        if article_ids is not None:
+            identity['article_subset'] = sorted(article_ids)
+        if unresolved_only:
+            identity['unresolved_only'] = True
+            identity['prior_review_reasons'] = [u['prior_review_reasons'] for a in group for u in a['units']]
         batch_id = f"rb-{sha256_bytes(canonical_json(identity))[:24]}"
         manifest, data = _review_manifest(batch_id, group)
+        if review_prompt_sha256 is not None:
+            manifest['review_prompt_sha256'] = review_prompt_sha256
+            if recheck:
+                manifest['recheck'] = True
+            manifest['manifest_sha256'] = ''
+            manifest['manifest_sha256'] = sha256_bytes(canonical_json(manifest))
+            data = canonical_json(manifest)
+        existing = connection.execute('SELECT manifest_sha256 FROM batch WHERE id=?', (batch_id,)).fetchone()
+        if existing:
+            if existing[0] != manifest['manifest_sha256']:
+                raise ValueError('review batch identity conflicts with frozen manifest')
+            continue
         path = inbox / f"{batch_id}.json"
         atomic_write(path, data + b"\n")
         units = [unit for article in group for unit in article["units"]]
@@ -114,7 +181,8 @@ def make_review_batches(
             ((batch_id, unit["unit_id"], index) for index, unit in enumerate(units)),
         )
         audit(connection, "create", "review_batch", batch_id, {"units": len(units)})
-    return {"review_batches_created": len(groups), "units": sum(len(group) for group in grouped.values())}
+        created += 1
+    return {"review_batches_created": created, "units": sum(len(group) for group in grouped.values())}
 
 
 def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
@@ -138,7 +206,8 @@ def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
     if set(payload) != {"schema_version", "batch_id", "manifest_sha256", "reviews"}:
         raise ValueError("unexpected review response fields")
     run = connection.execute("SELECT pipeline_version FROM run WHERE id=?", (attempt["run_id"],)).fetchone()
-    expected_schema = 2 if run["pipeline_version"] == "lexicographer-v2" else 1
+    wadoku = run['pipeline_version'] == 'wadoku-xml-v3'
+    expected_schema = 2 if run["pipeline_version"] in {"lexicographer-v2", "wadoku-xml-v3"} else 1
     if payload.get("schema_version") != expected_schema or payload.get("batch_id") != attempt["batch_id"] or payload.get("manifest_sha256") != attempt["manifest_sha256"]:
         raise ValueError("review envelope mismatch")
     expected = connection.execute(
@@ -156,6 +225,10 @@ def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
     reviews = payload.get("reviews")
     if not isinstance(reviews, list) or [item.get("unit_id") for item in reviews] != [row["id"] for row in expected]:
         raise ValueError("review unit order or set mismatch")
+    frozen = json.loads(Path(attempt['request_path']).read_text(encoding='utf-8'))
+    if wadoku and frozen.get('review_prompt_sha256') is not None and frozen['review_prompt_sha256'] != attempt['prompt_sha256']:
+        raise ValueError('review prompt provenance mismatch')
+    candidates = {unit['unit_id']: unit for article in frozen['articles'] for unit in article['units']}
     accepted = adjudication = already_reviewed = 0
     for source, item in zip(expected, reviews):
         if set(item) != {"unit_id", "source_sha256", "decision", "replacement_target", "reason"}:
@@ -164,10 +237,17 @@ def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
             raise ValueError(f"reviewer also produced translation for {source['id']}")
         if item.get("source_sha256") != source["source_sha256"]:
             raise ValueError(f"review source hash mismatch for {source['id']}")
+        current = connection.execute('SELECT target_text FROM translation WHERE id=?', (source['translation_id'],)).fetchone()
+        if current[0] != target_storage(source['role'], candidates[source['id']]['candidate_target']):
+            raise ValueError(f"review candidate changed for {source['id']}")
         decision = item.get("decision")
         replacement = item.get("replacement_target")
         if decision not in {"accept", "replace", "needs_adjudication"}:
             raise ValueError(f"invalid review decision for {source['id']}")
+        if wadoku and (not isinstance(item.get('reason'), str) or not item['reason'].strip()):
+            raise ValueError(f"nonempty Russian reason string required for {source['id']}; null is invalid even for accept")
+        if wadoku and decision != 'replace' and replacement is not None:
+            raise ValueError(f"replacement_target must be null for decision={decision}, unit={source['id']}")
         stored_replacement = None
         if decision == "replace":
             try:
@@ -175,7 +255,17 @@ def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
             except ValueError as error:
                 raise ValueError(f"invalid review replacement for {source['id']}: {error}") from error
             values = replacement if source["role"] == "glossary_set" else [replacement]
-            if not 1 <= len(values) <= 12 or any(
+            if wadoku:
+                from .validate_response import wadoku_scientific_source
+                validator = wadoku_glossary_issues if source['role'] == 'glossary_set' else wadoku_target_issues
+                options = {} if source['role'] == 'glossary_set' else {
+                    'scientific_source': wadoku_scientific_source(candidates[source['id']])}
+                replacement_issues = validator(source['source_text'], replacement,
+                             json.loads(source['protected_tokens_json']), source['id'], **options)
+                if replacement_issues:
+                    raise ValueError(f"invalid review replacement for {source['id']}: "
+                                     + json.dumps(replacement_issues, ensure_ascii=False))
+            elif not 1 <= len(values) <= 12 or any(
                 _plain_text_issues(
                     value, [],
                     allow_no_cyrillic=allows_japanese_grammar_label(source["role"], source["source_text"]),
@@ -191,7 +281,7 @@ def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
         # completed after the full review pass is materialized.  Validate the
         # stale response item, but never let it overwrite an already accepted
         # editorial decision.
-        if source["status"] == "reviewed":
+        if source["status"] == "reviewed" and not (wadoku and frozen.get('recheck')):
             already_reviewed += 1
             continue
         connection.execute(
@@ -200,6 +290,9 @@ def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
         )
         if decision in {"accept", "replace"}:
             if decision == "replace":
+                if wadoku and frozen.get('recheck'):
+                    connection.execute('UPDATE translation SET accepted=0 WHERE run_id=? AND unit_id=?',
+                                       (attempt['run_id'], source['id']))
                 connection.execute(
                     """INSERT INTO translation(run_id,unit_id,attempt_id,target_text,confidence,review_reason,target_sha256,accepted)
                     VALUES (?,?,?,?,?,?,?,1)""",
@@ -208,8 +301,17 @@ def ingest_review(connection: ConnectionLike, path: Path) -> dict[str, int]:
             else:
                 connection.execute("UPDATE translation SET accepted=1 WHERE id=?", (source["translation_id"],))
             connection.execute("UPDATE translation_unit SET status='reviewed' WHERE id=?", (source["id"],))
+            if wadoku and frozen.get('recheck'):
+                connection.execute("""UPDATE validation_issue SET resolved_at=CURRENT_TIMESTAMP,
+                    waiver_reason=? WHERE run_id=? AND unit_id=? AND code='needs_adjudication'
+                    AND resolved_at IS NULL""",
+                    ('resolved by contextual review attempt ' + attempt['id'], attempt['run_id'], source['id']))
             accepted += 1
         else:
+            if wadoku and frozen.get('recheck'):
+                connection.execute('UPDATE translation SET accepted=0 WHERE run_id=? AND unit_id=?',
+                                   (attempt['run_id'], source['id']))
+                connection.execute("UPDATE translation_unit SET status='translated' WHERE id=?", (source['id'],))
             connection.execute(
                 """INSERT INTO validation_issue(run_id,unit_id,attempt_id,validator,severity,code,details_json)
                 VALUES (?,?,?,'review-v1','error','needs_adjudication',?)""",

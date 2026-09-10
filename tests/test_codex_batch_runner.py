@@ -47,6 +47,17 @@ def test_manifest_schema_constrains_ordered_ids_hashes_and_target_types():
     assert alternatives[1]["properties"]["target_text"]["type"] == "string"
 
 
+def test_rich_review_schema_requires_reason_without_changing_legacy_contract():
+    manifest = {'batch_id': 'b', 'manifest_sha256': 'hash', 'articles': [{'units': [
+        {'unit_id': 'u', 'source_sha256': 'source', 'role': 'glossary_set'}]}]}
+    legacy = MODULE.build_output_schema(manifest, 'review')
+    rich = MODULE.build_output_schema({**manifest, 'pipeline': 'wadoku-xml-v3'}, 'review')
+    def reason(schema):
+        return schema['properties']['reviews']['items']['anyOf'][0]['properties']['reason']
+    assert reason(legacy) == {'type': ['string', 'null']}
+    assert reason(rich) == {'type': 'string', 'minLength': 1}
+
+
 def _progress_database(tmp_path):
     db_path = tmp_path / "progress.sqlite3"
     initialize(db_path)

@@ -1,0 +1,8 @@
+{
+  "scope_id": "71c1b53cd6556d7848de3d0b9b83b179b31e1392cb4501c9e733d221fa8c43db",
+  "entry_id": 3135900,
+  "attempt_id": "att-e3a310eda789427ab1824be4d13074a0",
+  "reviewer": "main-thread-source-review",
+  "note": "Checked all three selected Japanese expressions and their German source blocks against the parent meanings. Collecting shells matches sense 1, choosing a route sense 6, and finding luck sense 5. These are example-selection decisions, not Russian translation approval.",
+  "corrections": {}
+}

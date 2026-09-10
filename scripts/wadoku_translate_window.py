@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Prepare the full rich pilot and translate it through bounded saved windows."""
+from __future__ import annotations
+import argparse
+import json
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from jitendex_ru.config import Config
+from jitendex_ru.database import Database
+from jitendex_ru.batch import make_batches, claim, retry_or_split
+from jitendex_ru.db import record_attempt_usage, audit
+from jitendex_ru.util import canonical_json, sha256_file, sha256_bytes, atomic_write
+from jitendex_ru.validate_response import ingest_response, ValidationFailure
+from jitendex_ru.wadoku_pipeline import prepare_run, load_reviewed_examples, load_candidate_examples
+from jitendex_ru.wadoku_scope import collect_example_sources
+from jitendex_ru.wadoku_windows import begin_window, window_batches, finish_window
+from jitendex_ru.wadoku_retry import retry_prompt, save_runtime_prompt
+from jitendex_ru.wadoku_profile import DEFAULT_PROFILE, load_profile, resolve_prompt
+from run_codex_batches import dispatch_one, build_output_schema
+
+
+def resume_prepared(connection, run_id, prompt_sha256):
+    """Use frozen PostgreSQL inputs; never reparse XML to resume a window."""
+    run=connection.execute('SELECT * FROM run WHERE id=?',(run_id,)).fetchone()
+    if not run or run['pipeline_version']!='wadoku-xml-v3':
+        raise ValueError('resume requires a prepared rich Wadoku run')
+    if run['prompt_sha256']!=prompt_sha256:
+        raise ValueError('resume prompt differs from frozen run')
+    return {'run_id':run_id,'created':False,'resumed':True}
+
+
+def dispatch_batch(config,run_id,batch,work,prompt,context_budget):
+    db=Database(config)
+    c=db.connect()
+    try:
+        base_prompt = prompt
+        prompt = retry_prompt(c, batch['id'], base_prompt)
+        request_path=Path(batch['manifest_path'])
+        schema=build_output_schema(json.loads(request_path.read_text()),'translation')
+        supplied=request_path.stat().st_size+len(prompt.encode())+len(canonical_json(schema))+32768
+        if supplied+12000>context_budget:
+            raise ValueError('complete request exceeds diagnostic context reservation before claim')
+        item=claim(c,'wadoku-rich-luna',work/'outbox',run_id=run_id,kind='translation',
+                   model_id='gpt-5.6-luna',reasoning_effort='medium',transport='codex-agent',batch_id=batch['id'])
+        if item is None:
+            return
+        save_runtime_prompt(c, item, prompt, base_prompt, schema=schema)
+        c.commit()
+        result=dispatch_one(item,prompt,'translation',request_timeout_seconds=240,output_schema=schema)
+        atomic_write(Path(item['response_path']).with_suffix('.events.jsonl'),result.stdout.encode())
+        atomic_write(Path(item['response_path']).with_suffix('.stderr.txt'),result.stderr.encode())
+        if result.usage:
+            usage=result.usage
+            record_attempt_usage(c,item['attempt_id'],effective_model_id=item['model_id'],
+                reasoning_effort='medium',transport='codex-agent',input_tokens=usage['input_tokens'],
+                cached_input_tokens=usage.get('cached_input_tokens',0),output_tokens=usage['output_tokens'],
+                total_tokens=usage['input_tokens']+usage['output_tokens'],api_request_id=result.thread_id,
+                finish_reason='turn.completed',status_reason='rich pilot translation',latency_ms=result.latency_ms)
+            c.commit()
+        if result.returncode or not result.usage:
+            raise ValueError(f'CLI failed or usage absent for {item["attempt_id"]}; inspect saved attempt before resume')
+        try:
+            accepted=ingest_response(c,Path(item['response_path']))
+        except ValidationFailure as error:
+            # Ingestion records the rejection before raising; preserve that state.
+            c.commit()
+            recovery=retry_or_split(c,item['batch_id'],max_attempts=3)
+            c.commit()
+            print(json.dumps({'attempt_id':item['attempt_id'],'validation_rejected':True,
+                              'recovery':recovery},default=str),flush=True)
+            return
+        c.commit()
+        print(json.dumps({'attempt_id':item['attempt_id'],'usage':result.usage,'ingest':accepted},default=str),flush=True)
+    finally:
+        c.close()
+        db.close()
+
+
+def dispatch_window(config,c,run_id,ordinal,work,prompt,context_budget,max_batches,concurrency):
+    remaining=max_batches*3
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        while remaining:
+            ready=[dict(row) for row in window_batches(c,run_id,ordinal) if row['state']=='ready'][:min(concurrency,remaining)]
+            if not ready:
+                break
+            futures=[pool.submit(dispatch_batch,config,run_id,batch,work,prompt,context_budget) for batch in ready]
+            remaining-=len(futures)
+            for future in as_completed(futures):
+                future.result()
+
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--scope-id')
+    parser.add_argument('--run-id',type=int)
+    parser.add_argument('--candidate-scope',action='store_true')
+    parser.add_argument('--unclassified-source-only', action='store_true',
+                        help='Focused diagnostic only: translate unresolved entries without adopting failed structure')
+    parser.add_argument('--candidate-subset',type=int,nargs='+',
+                        help='Diagnostic source entry IDs, preserving candidate example context')
+    parser.add_argument('--prepare-only',action='store_true')
+    parser.add_argument('--entry-ids',type=int,nargs='+')
+    parser.add_argument('--max-batches',type=int,default=4)
+    parser.add_argument('--concurrency',type=int,default=3)
+    parser.add_argument('--context-budget',type=int,default=96000)
+    parser.add_argument('--config', type=Path, default=DEFAULT_PROFILE)
+    parser.add_argument('--prompt',type=Path)
+    args=parser.parse_args()
+    candidate_subset = args.candidate_subset
+    if args.unclassified_source_only and (not args.candidate_scope or args.run_id is not None):
+        raise ValueError('unclassified source fallback requires a new focused candidate scope')
+    if candidate_subset:
+        if args.run_id is not None or args.entry_ids or args.candidate_scope or not args.scope_id:
+            raise ValueError('candidate subset requires only scope ID and diagnostic entry IDs')
+        if not 1 <= len(candidate_subset) <= 10 or len(set(candidate_subset)) != len(candidate_subset):
+            raise ValueError('candidate subset requires 1–10 distinct source entries')
+        args.candidate_scope = True
+    if args.run_id is not None and (args.entry_ids or args.scope_id or args.candidate_scope):
+        raise ValueError('--run-id resumes frozen input; do not supply entries or scope')
+    if args.candidate_scope and args.entry_ids:
+        raise ValueError('candidate scope always includes the entire frozen pilot')
+    if args.run_id is None and (not args.scope_id or (not args.entry_ids and not args.candidate_scope)):
+        raise ValueError('new preparation requires --scope-id and --entry-ids')
+    if not 1 <= args.max_batches <= 100 or (args.entry_ids and not 1 <= len(args.entry_ids) <= 10):
+        raise ValueError('choose 1–100 batches, or 1–10 diagnostic entries')
+    if not 1 <= args.concurrency <= 5:
+        raise ValueError('concurrency must be 1–5')
+    if not 1 <= args.context_budget <= 128000:
+        raise ValueError('context reservation must be at most 128000')
+    if args.context_budget > 96000:
+        cache=json.loads((Path.home()/'.codex/models_cache.json').read_text())
+        model=next(m for m in cache['models'] if m['slug']=='gpt-5.6-luna')
+        if args.context_budget > model['context_window']*model['effective_context_window_percent']//200:
+            raise ValueError('reservation exceeds half the effective context')
+    config=load_profile(args.config)
+    from psycopg.conninfo import conninfo_to_dict
+    if config.db_backend!='postgresql' or conninfo_to_dict(config.database_url()).get('dbname')!='wadoku_rich_pilot':
+        raise ValueError('isolated pilot PostgreSQL required')
+    db=Database(config)
+    c=db.connect()
+    try:
+        frozen = None
+        if args.run_id is not None:
+            row = c.execute('SELECT prompt_sha256 FROM run WHERE id=?', (args.run_id,)).fetchone()
+            if not row:
+                raise ValueError('run absent')
+            frozen = row[0]
+        prompt_path = resolve_prompt(config, 'translation', args.prompt, frozen_sha256=frozen)
+        prompt = prompt_path.read_text()
+        if args.run_id is not None:
+            prepared=resume_prepared(c,args.run_id,sha256_file(prompt_path))
+        else:
+            scope=c.execute('SELECT * FROM wadoku_scope WHERE id=?',(args.scope_id,)).fetchone()
+            if not scope:
+                raise ValueError('scope absent')
+            if args.candidate_scope:
+                scoped=c.execute('SELECT entry_id,decision_json FROM wadoku_scope_entry WHERE scope_id=? ORDER BY ordinal', (args.scope_id,)).fetchall()
+                focused = json.loads(scope['manifest_json']).get('version') == 'wadoku-focused-scope-v1'
+                if not (focused and len(scoped) == 100) and not 150 <= len(scoped) <= 200:
+                    raise ValueError('candidate pilot needs 150–200 entries, or exactly 100 in a focused scope')
+                if candidate_subset:
+                    scoped = [r for r in scoped if r['entry_id'] in candidate_subset]
+                    if len(scoped) != len(candidate_subset):
+                        raise ValueError('diagnostic entry is outside the frozen pilot')
+                missing=[r['entry_id'] for r in scoped if not r['decision_json']]
+                if args.unclassified_source_only and not focused:
+                    raise ValueError('source-only fallback is restricted to focused diagnostic scopes')
+                if missing and not args.unclassified_source_only:
+                    raise ValueError(f'candidate scope has missing classification: {missing}')
+                args.entry_ids=[r['entry_id'] for r in scoped]
+            entries,decisions=[],{}
+            for entry_id in args.entry_ids:
+                row=c.execute('SELECT * FROM wadoku_scope_entry WHERE scope_id=? AND entry_id=?',(args.scope_id,entry_id)).fetchone()
+                if not row:
+                    raise ValueError('source/classification absent')
+                if not row['decision_json']:
+                    if not args.unclassified_source_only:
+                        raise ValueError('source/classification absent')
+                    entries.append((row['ordinal'], json.loads(row['source_json'])))
+                    decisions[entry_id] = {'article_group_decision': {
+                        'article_policy': 'needs_review', 'lookup_policy': 'needs_review',
+                        'parent_id': None, 'lookup_aliases': [],
+                        'lookup_needs_review': 'Classification failed; source-only diagnostic translation.',
+                        'reason': 'No failed Luna structural proposal was adopted.'}, 'examples': []}
+                    continue
+                proposal=json.loads(row['decision_json'])['result']
+                if not args.candidate_scope and (proposal['article_policy']!='independent' or proposal['lookup_needs_review']):
+                    raise ValueError('diagnostic subset requires resolved independent entries')
+                entries.append((row['ordinal'],json.loads(row['source_json'])))
+                loader=load_candidate_examples if args.candidate_scope else load_reviewed_examples
+                decisions[entry_id]={'article_group_decision':proposal,
+                                    'examples':loader(c,args.scope_id,entry_id)}
+            source_path=Path('work/wadoku-xml/source/wadoku-xml-20260705/wadoku.xml')
+            children=collect_example_sources(source_path,config.raw['source']['xml_sha256'],
+                                            [e for d in decisions.values() for e in d['examples']])
+            versions={'labels':sha256_file(Path('terminology/wadoku-xml-labels-v2.json')),
+                'morphology':'source-classification-v6','examples':'reviewed-full-context-v1',
+                'corrections':'source-preserved','prompt':sha256_file(prompt_path),'schema':'rich-v3'}
+            if args.candidate_scope:
+                versions['examples']='classifier-candidate-full-context-v1'
+                versions['morphology']='classification-sha256:'+sha256_bytes(canonical_json(
+                    [[r['entry_id'],json.loads(r['decision_json']) if r['decision_json'] else None] for r in scoped]))
+            limits={'diagnostic_subset':True,'scope_id':args.scope_id,'max_new_batches':args.max_batches,
+                    'context_budget':96000,'output_reserve':12000,
+                    'articles_per_batch':min(100, config.raw['batch']['soft_max_articles'])}
+            if args.candidate_scope:
+                limits.update(diagnostic_subset=False,candidate_scope=True,release_approved=False,
+                              context_budget=args.context_budget)
+                if candidate_subset:
+                    limits.update(diagnostic_subset=True,candidate_scope=False,
+                                  candidate_subset=candidate_subset)
+                if args.unclassified_source_only:
+                    limits.update(unclassified_source_only=missing, release_approved=False)
+            prepared=prepare_run(c,snapshot_id=scope['snapshot_id'],entries=entries,versions=versions,
+                limits=limits,decisions=decisions,example_sources=children)
+        run_id=prepared['run_id']
+        work=Path('work/wadoku-xml/pilot-v6/translation')/str(run_id)
+        run_limits=json.loads(c.execute('SELECT limits_json FROM run WHERE id=?',(run_id,)).fetchone()[0])
+        make_batches(c,run_id,work/'inbox',{},run_limits.get('articles_per_batch',1),24000,100,16000,96000,150)
+        c.commit()
+        print(json.dumps({'prepared':prepared}),flush=True)
+        if args.prepare_only:
+            return
+        window=begin_window(c,run_id,args.max_batches)
+        c.commit()
+        if window['state']=='no_ready_batches':
+            print(json.dumps({'window':window}),flush=True)
+            return
+        audit(c,'wadoku_translation_dispatch_budget','run',run_id,
+              {'context_budget':args.context_budget,'output_reserve':12000,'runtime_margin':32768,
+               'max_new_batches':args.max_batches,'schema_included':True,'concurrency':args.concurrency})
+        c.commit()
+        dispatch_window(config,c,run_id,window['ordinal'],work,prompt,args.context_budget,args.max_batches,args.concurrency)
+        report=finish_window(c,run_id,window['ordinal'])
+        c.commit()
+        print(json.dumps({'window_report':report},default=str),flush=True)
+    finally:
+        c.close()
+        db.close()
+
+
+if __name__=='__main__':
+    main()

@@ -116,6 +116,10 @@ def pronunciation_records(value: dict[str, Any]) -> dict[str, Any]:
             issues.append({"code": "unsupported_accent_scope", "path": path})
             continue
         raw = plain(node)
+        if TEMPLATE_RE.search(reading) and raw.isdigit():
+            limitations.append({'code': 'open_template_pitch_not_mapped', 'path': path,
+                                'source_value': raw, 'source_reading': reading})
+            continue
         if not raw.isdigit() or length is None or int(raw) > length:
             issues.append({"code": "invalid_accent", "path": path, "value": raw})
             continue

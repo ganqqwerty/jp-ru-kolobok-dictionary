@@ -21,7 +21,7 @@ from jitendex_ru.batch import make_batches as shared_make_batches
 from jitendex_ru.database import Database
 from jitendex_ru.db import audit
 from jitendex_ru.schema_validation import validate_archive
-from jitendex_ru.validate_response import wadoku_target_issues
+from jitendex_ru.validate_response import wadoku_target_issues, wadoku_glossary_issues, target_storage
 from jitendex_ru.util import atomic_write, canonical_json, sha256_bytes, sha256_file
 from jitendex_ru.wadoku_xml import (
     EXPECTED_COUNTS, WADOKU_ARCHIVE_SHA256, WADOKU_PIPELINE, build_rich_archive, reference_target_index,
@@ -1237,31 +1237,35 @@ def replace_target(config: Config, run_id: int, input_path: Path) -> dict[str, A
     if set(payload) != expected:
         raise ValueError(f"manual replacement fields must be exactly {sorted(expected)}")
     if not all(isinstance(payload[key], str) and payload[key].strip()
-               for key in expected):
-        raise ValueError("manual replacement fields must be non-empty strings")
+               for key in expected - {"target_text"}):
+        raise ValueError("manual replacement identity fields must be non-empty strings")
     database = Database(config)
     connection = database.connect()
     try:
-        _run_source(connection, run_id)
+        run = connection.execute("SELECT pipeline_version FROM run WHERE id=?", (run_id,)).fetchone()
+        if run is None or run["pipeline_version"] not in {WADOKU_PIPELINE, "wadoku-xml-v3"}:
+            raise ValueError(f"run {run_id} is not a supported Wadoku XML run")
         unit = connection.execute(
             "SELECT * FROM translation_unit WHERE run_id=? AND id=?",
             (run_id, payload["unit_id"]),
         ).fetchone()
         if unit is None:
             raise ValueError("manual replacement unit does not belong to this run")
-        issues = wadoku_target_issues(
+        validator = wadoku_glossary_issues if unit["role"] == "glossary_set" else wadoku_target_issues
+        issues = validator(
             unit["source_text"], payload["target_text"],
             list(json.loads(unit["protected_tokens_json"])), unit["id"],
         )
         if issues:
             raise ValueError(f"manual replacement failed validation: {issues}")
+        stored_target = target_storage(unit["role"], payload["target_text"])
         translation = connection.execute(
             """SELECT * FROM translation WHERE run_id=? AND unit_id=? AND accepted=1
-            ORDER BY id DESC LIMIT 1""", (run_id, unit["id"]),
+            ORDER BY id DESC LIMIT 1 FOR UPDATE""", (run_id, unit["id"]),
         ).fetchone()
         if translation is None:
             raise ValueError("manual replacement requires an accepted target")
-        new_hash = sha256_bytes(payload["target_text"].encode())
+        new_hash = sha256_bytes(stored_target.encode())
         if (translation["target_sha256"] == new_hash
                 and translation["acceptance_method"] == "manual"):
             return {"run_id": run_id, "unit_id": unit["id"], "applied": False,
@@ -1277,12 +1281,12 @@ def replace_target(config: Config, run_id: int, input_path: Path) -> dict[str, A
              mapping_identity_json,canonicalizer_version)
             VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (run_id, unit["id"], translation["id"], translation["target_text"],
-             translation["target_sha256"], payload["target_text"], new_hash,
+             translation["target_sha256"], stored_target, new_hash,
              "manual-wadoku-qa", mapping, "manual-wadoku-qa-v1"),
         )
         connection.execute(
             """UPDATE translation SET target_text=?,target_sha256=?,acceptance_method='manual'
-            WHERE id=?""", (payload["target_text"], new_hash, translation["id"]),
+            WHERE id=?""", (stored_target, new_hash, translation["id"]),
         )
         result = {
             "run_id": run_id, "unit_id": unit["id"], "translation_id": translation["id"],
