@@ -17,6 +17,7 @@ from jitendex_ru.wadoku_classification import make_request, response_schema, val
 from run_codex_batches import dispatch_one
 from jitendex_ru.wadoku_profile import DEFAULT_PROFILE, load_profile, resolve_prompt
 from jitendex_ru.wadoku_retry import retry_prompt, save_runtime_prompt
+from jitendex_ru.wadoku_telemetry import event, logged_dispatch, run_logged
 
 
 def main():
@@ -31,11 +32,12 @@ def main():
     parser.add_argument('--work-dir', type=Path, default=Path('work/wadoku-xml/pilot-v6/classification'))
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--revalidate-entry', type=int)
+    parser.add_argument('--event-log', type=Path)
     args=parser.parse_args()
     if not 1<=args.limit<=100:
         raise ValueError('choose a bounded window of 1–100 tasks')
-    if not 1<=args.concurrency<=5:
-        raise ValueError('pilot concurrency must be 1–5')
+    if not 1<=args.concurrency<=100:
+        raise ValueError('pilot concurrency must be 1–100')
     if not 1<=args.context_budget<=128000:
         raise ValueError('pilot context budget must be at most 128000')
     if args.context_budget>96000:
@@ -137,6 +139,7 @@ def main():
                 prompt_hash,sha256_bytes(b''),sha256_bytes(b''),'{}','wadoku-structure-v2',identity)).fetchone()[0])
         connection.commit()
         futures={}
+        event('stage_prepared', run_id=run_id, scope_id=args.scope_id, tasks=len(requests), concurrency=args.concurrency)
         for request,schema,input_bound,output_reserve in requests:
             path=args.work_dir/'inbox'/f"{request['batch_id']}.json"
             if path.exists() and path.read_bytes()!=canonical_json(request):
@@ -166,7 +169,8 @@ def main():
             save_runtime_prompt(connection, item, runtime_prompt, prompt, schema=schema)
             connection.commit()
             started=time.monotonic()
-            future=executor.submit(dispatch_one,item,runtime_prompt,'classification',request_timeout_seconds=240,output_schema=schema)
+            event('attempt_queued', run_id=run_id, entry_id=request['entry']['entry_id'], batch_id=item['batch_id'], attempt_id=item['attempt_id'])
+            future=executor.submit(logged_dispatch,dispatch_one,item,runtime_prompt,'classification',request_timeout_seconds=240,output_schema=schema)
             futures[future]=(request,item,input_bound,output_reserve,started)
         for future in as_completed(futures):
             request,item,input_bound,output_reserve,started=futures[future]
@@ -213,6 +217,8 @@ def main():
             audit(connection,'wadoku_classification_result','attempt',item['attempt_id'],{'errors':errors,'entry_id':request['entry']['entry_id'],
                 'input_budget_estimate':input_bound,'output_reserve':output_reserve,'actual_usage':result.usage})
             connection.commit()
+            event('attempt_result', run_id=run_id, entry_id=request['entry']['entry_id'], batch_id=item['batch_id'],
+                  attempt_id=item['attempt_id'], status=status, errors=errors, latency_ms=result.latency_ms)
             print(json.dumps({'entry_id':request['entry']['entry_id'],'attempt_id':item['attempt_id'],'seconds':round(time.monotonic()-started,2),
                              'usage':result.usage,'errors':errors,'policy':payload.get('article_policy') if payload else None},ensure_ascii=False),flush=True)
             # Drain the whole bounded window; never abandon another live response.
@@ -223,4 +229,4 @@ def main():
 
 
 if __name__=='__main__':
-    main()
+    run_logged('classification', main)

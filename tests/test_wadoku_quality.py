@@ -22,6 +22,19 @@ def source(body, *, form=None, entry_id=1):
 LABELS = label_catalog(Path('terminology/wadoku-xml-labels-v2.json'))
 
 
+def test_v6_sentence_task_is_explicit_without_changing_output_role():
+    value = source('<sense><trans><tr>Es war mein Wunsch.</tr></trans></sense>'
+                   '<ref type="main" subentrytype="XSatz" id="2"/>',
+                   form='<form><orth>私の願いであった。</orth></form>')
+    versions = dict(labels='test', morphology='test', examples='test', corrections='test', prompt='test', schema='rich-v6')
+    unit = translation_projection(value, versions=versions)['units'][0]
+    assert unit['role'] == 'glossary_set'
+    assert unit['task_type'] == 'sentence_translation'
+    assert unit['japanese'] == '私の願いであった。'
+    versions['schema'] = 'rich-v5'
+    assert 'task_type' not in translation_projection(value, versions=versions)['units'][0]
+
+
 def test_pitch_scope_and_duplicates_are_preserved_without_glossary_digits():
     value = source('<sense><accent>0</accent><trans><tr>gut</tr></trans></sense>'
                    '<sense><accent>0</accent><accent>0</accent><accent>3</accent><trans><tr>gut</tr></trans></sense>',

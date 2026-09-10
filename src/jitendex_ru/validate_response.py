@@ -332,6 +332,21 @@ def wadoku_redundant_source_echo(unit, target):
     return list(dict.fromkeys(found))
 
 
+def wadoku_lexical_contract_issues(unit, target):
+    """Validate explicit v5 source annotations, never an unrestricted Latin ban."""
+    parts = target if isinstance(target, list) else [target]
+    combined = ' '.join(p for p in parts if isinstance(p, str))
+    target_words = {w.casefold() for w in re.findall(r'\b[A-Za-zÀ-ž]{3,}\b', combined)}
+    copied = [w for w in unit.get('source_lexical_terms', []) if w.casefold() in target_words]
+    missing = [w for w in unit.get('required_literals', []) if not re.search(r'(?<!\w)' + re.escape(w) + r'(?!\w)', combined)]
+    issues = []
+    if copied and not wadoku_scientific_source(unit):
+        issues.append({'code': 'untranslated_source_lexeme', 'unit_id': unit['unit_id'], 'words': copied})
+    if missing:
+        issues.append({'code': 'required_literal_missing', 'unit_id': unit['unit_id'], 'literals': missing})
+    return issues
+
+
 def wadoku_target_issues(
     source_text: str, target: Any, protected: list[str], unit_id: str | None = None,
     *, allow_exact_source: bool = False, scientific_source: bool = False,
@@ -613,7 +628,7 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for article in manifest.get("articles", []):
             for unit in article.get("units", []):
-                if article.get('read_only_context', {}).get('versions', {}).get('schema') == 'rich-v4':
+                if article.get('read_only_context', {}).get('versions', {}).get('schema') in {'rich-v4', 'rich-v5', 'rich-v6'}:
                     strict_units[unit['unit_id']] = unit
                 if wadoku_scientific_source(unit):
                     scientific_units.add(unit['unit_id'])
@@ -672,6 +687,7 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
         if item.get("confidence") != "high" and not item.get("review_reason"):
             issues.append({"code": "missing_review_reason", "unit_id": source["id"]})
         target = item.get("target_text")
+        issues.extend(wadoku_lexical_contract_issues(strict_units.get(source['id'], {}), target))
         echo = wadoku_redundant_source_echo(strict_units.get(source['id'], {}), target)
         if echo:
             issues.append({'code': 'redundant_source_echo', 'unit_id': source['id'], 'fragments': echo})

@@ -1,9 +1,16 @@
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import wadoku_translate_window as driver
+
+
+@pytest.fixture(autouse=True)
+def fake_database(monkeypatch):
+    monkeypatch.setattr(driver, 'Database', lambda config: SimpleNamespace(
+        close=lambda: None, metrics=SimpleNamespace(snapshot=lambda: {})))
 
 
 def test_parallel_dispatch_stays_in_window_and_bounds_workers(monkeypatch):
@@ -13,7 +20,7 @@ def test_parallel_dispatch_stays_in_window_and_bounds_workers(monkeypatch):
     seen = []
     monkeypatch.setattr(driver, 'window_batches', lambda c, r, o: rows)
 
-    def dispatch(config, run_id, batch, work, prompt, budget):
+    def dispatch(config, run_id, batch, work, prompt, budget, database):
         nonlocal active, peak
         with lock:
             active += 1
@@ -25,7 +32,7 @@ def test_parallel_dispatch_stays_in_window_and_bounds_workers(monkeypatch):
             active -= 1
 
     monkeypatch.setattr(driver, 'dispatch_batch', dispatch)
-    driver.dispatch_window(None, None, 16, 7, Path('.'), '', 128000, 7, 3)
+    driver.dispatch_window(None, SimpleNamespace(commit=lambda: None), 16, 7, Path('.'), '', 128000, 7, 3)
     assert 1 < peak <= 3
     assert sorted(seen) == [str(i) for i in range(7)]
 
@@ -35,13 +42,14 @@ def test_parallel_dispatch_waits_for_siblings_after_failure(monkeypatch):
     saved = []
     monkeypatch.setattr(driver, 'window_batches', lambda c, r, o: rows)
 
-    def dispatch(config, run_id, batch, work, prompt, budget):
+    def dispatch(config, run_id, batch, work, prompt, budget, database):
         if batch['id'] == '0':
             raise ValueError('fixture worker failure')
         time.sleep(0.01)
         saved.append(batch['id'])
+        rows[int(batch['id'])]['state'] = 'complete'
 
     monkeypatch.setattr(driver, 'dispatch_batch', dispatch)
-    with pytest.raises(ValueError, match='fixture worker failure'):
-        driver.dispatch_window(None, None, 16, 7, Path('.'), '', 128000, 4, 3)
-    assert sorted(saved) == ['1', '2']
+    with pytest.raises(RuntimeError, match='1 batches failed'):
+        driver.dispatch_window(None, SimpleNamespace(commit=lambda: None), 16, 7, Path('.'), '', 128000, 4, 3)
+    assert sorted(saved) == ['1', '2', '3']

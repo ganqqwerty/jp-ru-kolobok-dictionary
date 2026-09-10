@@ -339,6 +339,35 @@ CONTROLLED_GRAMMAR = {
     'Nominalsuff.': 'именной суффикс',
 }
 
+CONTROLLED_GRAMMAR_V5 = {**CONTROLLED_GRAMMAR, 'als Adv.': 'наречие',
+    'als Personalpron.': 'личное местоимение', 'als Wortkomp.': 'компонент сложного слова'}
+MUSICAL_NOTATION = {'p', 'pp', 'ppp', 'f', 'ff', 'fff', 'mp', 'mf', 'fp', 'sf', 'sfz', 'rfz', 'sffz'}
+
+
+def lexical_contract(nodes, scope, member_paths, source_text):
+    """Bind literal notation and ordinary XML lexical tokens to the selected unit."""
+    terms = []
+    for path, node in nodes.items():
+        if node['tag'] != 'token' or node['attributes'].get('type') not in {'N', 'V', 'Adj', 'Adv'}:
+            continue
+        if not any(path == p or path.startswith(p + '/') for p in member_paths):
+            continue
+        if any((path == p or path.startswith(p + '/')) and n['attributes'].get('langdesc')
+               for p, n in nodes.items()):
+            continue
+        terms.extend(w for w in re.findall(r'\b[A-Za-zÀ-ž]{3,}\b', plain(node)) if not w.isupper())
+    music = any(n['tag'] == 'usg' and plain(n).strip() == 'Mus.'
+                and scope and p.startswith(scope + '/') for p, n in nodes.items())
+    literals = []
+    if music:
+        try:
+            equivalents = json.loads(source_text)
+        except ValueError:
+            equivalents = []
+        if isinstance(equivalents, list):
+            literals = [s for s in equivalents if isinstance(s, str) and s in MUSICAL_NOTATION]
+    return {'source_lexical_terms': list(dict.fromkeys(terms)), 'required_literals': list(dict.fromkeys(literals))}
+
 
 def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
                            examples: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -349,10 +378,11 @@ def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
         raise ValueError("projection requires every meaning-relevant version")
     projected = copy.deepcopy(sense_translation_entry(value))
     nodes = {path: node for node, path in tree_paths(value["tree"])}
-    if versions['schema'] == 'rich-v4':
+    if versions['schema'] in {'rich-v4', 'rich-v5', 'rich-v6'}:
         for block in projected['blocks']:
             if block['role'] != 'glossary_set' and not block['protected_fragments']:
-                label = CONTROLLED_GRAMMAR.get(block['prompt_text'].strip())
+                catalog = CONTROLLED_GRAMMAR_V5 if versions['schema'] in {'rich-v5', 'rich-v6'} else CONTROLLED_GRAMMAR
+                label = catalog.get(block['prompt_text'].strip())
                 if label:
                     block['controlled_metadata'] = {'ru': label, 'de': block['prompt_text']}
                     block['has_translatable_text'] = False
@@ -385,13 +415,22 @@ def translation_projection(value: dict[str, Any], *, versions: dict[str, str],
             "protected_tokens": [f["placeholder"] for f in block["protected_fragments"]],
             "protected_fragment_context": copy.deepcopy(block["protected_fragments"]),
         })
-        if versions['schema'] == 'rich-v4':
+        if versions['schema'] in {'rich-v4', 'rich-v5', 'rich-v6'}:
             units[-1]['grammatical_scope'] = [
                 {'source_path': other['xml_path'], 'source_text': other['prompt_text'],
                  'label': other['controlled_metadata']['ru']}
                 for other in projected['blocks'] if other.get('controlled_metadata')
                 and other.get('sense_path') and scope
                 and (scope == other['sense_path'] or scope.startswith(other['sense_path'] + '/'))]
+        if versions['schema'] in {'rich-v5', 'rich-v6'}:
+            units[-1].update(lexical_contract(nodes, scope, member_paths, block['prompt_text']))
+        if versions['schema'] == 'rich-v6':
+            japanese = next((n['text'] for p,n in nodes.items() if p.endswith('/orth[1]')), '')
+            sentence = any(n['tag'] == 'ref' and n.get('attributes', {}).get('subentrytype') == 'XSatz'
+                           for n in nodes.values()) or japanese.rstrip().endswith(('。', '！', '？'))
+            units[-1].update(japanese=japanese, task_type=(
+                'sentence_translation' if sentence and block['role'] == 'glossary_set'
+                else 'definition' if block['role'] == 'glossary_set' else 'explanatory_note'))
     paths = [path for block in projected["blocks"] for path in block.get("member_paths", [block["xml_path"]])]
     expected = [b["xml_path"] for b in value["blocks"]]
     if Counter(paths) != Counter(expected):

@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+import traceback
+import time
 
 from jitendex_ru.config import Config
 from jitendex_ru.database import Database
@@ -16,6 +18,7 @@ from jitendex_ru.wadoku_pipeline import prepare_run, load_reviewed_examples, loa
 from jitendex_ru.wadoku_scope import collect_example_sources
 from jitendex_ru.wadoku_windows import begin_window, window_batches, finish_window
 from jitendex_ru.wadoku_retry import retry_prompt, save_runtime_prompt
+from jitendex_ru.wadoku_telemetry import event, logged_dispatch, run_logged
 from jitendex_ru.wadoku_profile import DEFAULT_PROFILE, load_profile, resolve_prompt
 from run_codex_batches import dispatch_one, build_output_schema
 
@@ -30,14 +33,34 @@ def resume_prepared(connection, run_id, prompt_sha256):
     return {'run_id':run_id,'created':False,'resumed':True}
 
 
-def dispatch_batch(config,run_id,batch,work,prompt,context_budget):
-    db=Database(config)
+def require_complete(report):
+    if report['missing_units']:
+        raise RuntimeError(f"translation incomplete: {len(report['missing_units'])} units missing; see coverage event")
+
+
+def recover_transport(c, batch_id):
+    """A busy service is not evidence that the dictionary batch needs splitting."""
+    row = c.execute('SELECT attempt_count,state FROM batch WHERE id=?', (batch_id,)).fetchone()
+    if row['state'] != 'retryable':
+        raise ValueError('transport recovery requires retryable state')
+    if row['attempt_count'] >= 3:
+        c.execute("UPDATE batch SET state='blocked' WHERE id=? AND state='retryable'", (batch_id,))
+        c.commit()
+        return {'batch_id':batch_id,'requeued':False,'split':False,'blocked':True}
+    delay = min(20, 5 * 2 ** (row['attempt_count'] - 1))
+    c.commit()
+    return {**retry_or_split(c, batch_id, max_attempts=3), 'delay_s':delay}
+
+
+def dispatch_batch(config,run_id,batch,work,prompt,context_budget,database=None):
+    db=database or Database(config)
     c=db.connect()
     try:
         base_prompt = prompt
         prompt = retry_prompt(c, batch['id'], base_prompt)
         request_path=Path(batch['manifest_path'])
-        schema=build_output_schema(json.loads(request_path.read_text()),'translation')
+        request=json.loads(request_path.read_text())
+        schema=build_output_schema(request,'translation')
         supplied=request_path.stat().st_size+len(prompt.encode())+len(canonical_json(schema))+32768
         if supplied+12000>context_budget:
             raise ValueError('complete request exceeds diagnostic context reservation before claim')
@@ -47,9 +70,14 @@ def dispatch_batch(config,run_id,batch,work,prompt,context_budget):
             return
         save_runtime_prompt(c, item, prompt, base_prompt, schema=schema)
         c.commit()
-        result=dispatch_one(item,prompt,'translation',request_timeout_seconds=240,output_schema=schema)
+        event('attempt_queued', run_id=run_id, batch_id=batch['id'], attempt_id=item['attempt_id'],
+              entry_ids=[a['sequence'] for a in request['articles']], input_reservation=supplied)
+        c.close()
+        c=None  # Never occupy a database connection while waiting for Luna.
+        result=logged_dispatch(dispatch_one,item,prompt,'translation',request_timeout_seconds=240,output_schema=schema)
         atomic_write(Path(item['response_path']).with_suffix('.events.jsonl'),result.stdout.encode())
         atomic_write(Path(item['response_path']).with_suffix('.stderr.txt'),result.stderr.encode())
+        c=db.connect()
         if result.usage:
             usage=result.usage
             record_attempt_usage(c,item['attempt_id'],effective_model_id=item['model_id'],
@@ -59,35 +87,75 @@ def dispatch_batch(config,run_id,batch,work,prompt,context_budget):
                 finish_reason='turn.completed',status_reason='rich pilot translation',latency_ms=result.latency_ms)
             c.commit()
         if result.returncode or not result.usage:
-            raise ValueError(f'CLI failed or usage absent for {item["attempt_id"]}; inspect saved attempt before resume')
-        try:
-            accepted=ingest_response(c,Path(item['response_path']))
-        except ValidationFailure as error:
-            # Ingestion records the rejection before raising; preserve that state.
+            errors=[{'code':'transport_failure','returncode':result.returncode,'usage_available':bool(result.usage)}]
+            changed=c.execute("UPDATE attempt SET outcome='rejected',error_json=?,completed_at=CURRENT_TIMESTAMP WHERE id=? AND outcome='claimed' AND lease_token=?",
+                              (canonical_json(errors).decode(),item['attempt_id'],item['lease_token'])).rowcount
+            leased=c.execute("UPDATE batch SET state='retryable',lease_token=NULL,lease_expires_at=NULL WHERE id=? AND state='leased' AND lease_token=?",
+                             (item['batch_id'],item['lease_token'])).rowcount
+            if changed!=1 or leased!=1:
+                c.rollback()
+                raise ValueError('transport recovery lost its exact lease')
             c.commit()
-            recovery=retry_or_split(c,item['batch_id'],max_attempts=3)
-            c.commit()
-            print(json.dumps({'attempt_id':item['attempt_id'],'validation_rejected':True,
-                              'recovery':recovery},default=str),flush=True)
-            return
+        else:
+            try:
+                accepted=ingest_response(c,Path(item['response_path']))
+            except ValidationFailure:
+                c.commit()
+                errors=json.loads(c.execute('SELECT error_json FROM attempt WHERE id=?',(item['attempt_id'],)).fetchone()[0])
+            else:
+                c.commit()
+                event('attempt_result',run_id=run_id,batch_id=batch['id'],attempt_id=item['attempt_id'],status='accepted',errors=[])
+                return
         c.commit()
-        print(json.dumps({'attempt_id':item['attempt_id'],'usage':result.usage,'ingest':accepted},default=str),flush=True)
+        recovery=(recover_transport(c,item['batch_id']) if result.returncode or not result.usage
+                  else retry_or_split(c,item['batch_id'],max_attempts=3))
+        c.commit()
+        event('attempt_result',run_id=run_id,batch_id=batch['id'],attempt_id=item['attempt_id'],
+              status='rejected',errors=errors,recovery=recovery)
+        if recovery.get('delay_s'):
+            c.close()
+            c=None
+            event('transport_backoff', batch_id=item['batch_id'], delay_s=recovery['delay_s'])
+            time.sleep(recovery['delay_s'])
     finally:
-        c.close()
-        db.close()
+        if c is not None:
+            c.close()
+        if database is None:
+            db.close()
 
 
 def dispatch_window(config,c,run_id,ordinal,work,prompt,context_budget,max_batches,concurrency):
     remaining=max_batches*3
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        while remaining:
-            ready=[dict(row) for row in window_batches(c,run_id,ordinal) if row['state']=='ready'][:min(concurrency,remaining)]
-            if not ready:
-                break
-            futures=[pool.submit(dispatch_batch,config,run_id,batch,work,prompt,context_budget) for batch in ready]
-            remaining-=len(futures)
-            for future in as_completed(futures):
-                future.result()
+    database=Database(config)
+    failures={}
+    try:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures={}
+            while remaining or futures:
+                running=set(futures.values())
+                ready=[dict(row) for row in window_batches(c,run_id,ordinal)
+                       if row['state']=='ready' and row['id'] not in running and row['id'] not in failures]
+                c.commit()
+                for batch in ready[:min(concurrency-len(futures),remaining)]:
+                    future=pool.submit(dispatch_batch,config,run_id,batch,work,prompt,context_budget,database)
+                    futures[future]=batch['id']
+                    remaining-=1
+                if not futures:
+                    break
+                done,_=wait(futures,return_when=FIRST_COMPLETED)
+                for future in done:
+                    batch_id=futures.pop(future)
+                    try:
+                        future.result()
+                    except Exception as error:
+                        failures[batch_id]=str(error)
+                        event('batch_exception',run_id=run_id,batch_id=batch_id,error_type=type(error).__name__,
+                              error=str(error),traceback=traceback.format_exc())
+            if failures:
+                raise RuntimeError(f'{len(failures)} batches failed unexpectedly; see event log: {sorted(failures)}')
+    finally:
+        event('database_metrics',run_id=run_id,**database.metrics.snapshot())
+        database.close()
 
 
 def main():
@@ -103,6 +171,8 @@ def main():
     parser.add_argument('--entry-ids',type=int,nargs='+')
     parser.add_argument('--max-batches',type=int,default=4)
     parser.add_argument('--concurrency',type=int,default=3)
+    parser.add_argument('--articles-per-batch',type=int)
+    parser.add_argument('--event-log',type=Path)
     parser.add_argument('--context-budget',type=int,default=96000)
     parser.add_argument('--config', type=Path, default=DEFAULT_PROFILE)
     parser.add_argument('--prompt',type=Path)
@@ -124,8 +194,10 @@ def main():
         raise ValueError('new preparation requires --scope-id and --entry-ids')
     if not 1 <= args.max_batches <= 100 or (args.entry_ids and not 1 <= len(args.entry_ids) <= 10):
         raise ValueError('choose 1–100 batches, or 1–10 diagnostic entries')
-    if not 1 <= args.concurrency <= 5:
-        raise ValueError('concurrency must be 1–5')
+    if not 1 <= args.concurrency <= 100:
+        raise ValueError('concurrency must be 1–100')
+    if args.articles_per_batch is not None and (not 1 <= args.articles_per_batch <= 100 or args.run_id is not None):
+        raise ValueError('articles-per-batch is 1–100 and only for a new run')
     if not 1 <= args.context_budget <= 128000:
         raise ValueError('context reservation must be at most 128000')
     if args.context_budget > 96000:
@@ -196,14 +268,14 @@ def main():
                                             [e for d in decisions.values() for e in d['examples']])
             versions={'labels':sha256_file(Path('terminology/wadoku-xml-labels-v2.json')),
                 'morphology':'source-classification-v6','examples':'reviewed-full-context-v1',
-                'corrections':'source-preserved','prompt':sha256_file(prompt_path),'schema':'rich-v4'}
+                'corrections':'source-preserved','prompt':sha256_file(prompt_path),'schema':'rich-v6'}
             if args.candidate_scope:
                 versions['examples']='classifier-candidate-full-context-v1'
                 versions['morphology']='classification-sha256:'+sha256_bytes(canonical_json(
                     [[r['entry_id'],json.loads(r['decision_json']) if r['decision_json'] else None] for r in scoped]))
             limits={'diagnostic_subset':True,'scope_id':args.scope_id,'max_new_batches':args.max_batches,
                     'context_budget':96000,'output_reserve':12000,
-                    'articles_per_batch':min(100, config.raw['batch']['soft_max_articles'])}
+                    'articles_per_batch':args.articles_per_batch or min(100, config.raw['batch']['soft_max_articles'])}
             if args.candidate_scope:
                 limits.update(diagnostic_subset=False,candidate_scope=True,release_approved=False,
                               context_budget=args.context_budget)
@@ -220,6 +292,8 @@ def main():
         make_batches(c,run_id,work/'inbox',{},run_limits.get('articles_per_batch',1),24000,100,16000,96000,150)
         c.commit()
         print(json.dumps({'prepared':prepared}),flush=True)
+        event('stage_prepared',run_id=run_id,scope_id=run_limits.get('scope_id'),concurrency=args.concurrency,
+              articles_per_batch=run_limits.get('articles_per_batch',1))
         if args.prepare_only:
             return
         window=begin_window(c,run_id,args.max_batches)
@@ -234,11 +308,15 @@ def main():
         dispatch_window(config,c,run_id,window['ordinal'],work,prompt,args.context_budget,args.max_batches,args.concurrency)
         report=finish_window(c,run_id,window['ordinal'])
         c.commit()
-        print(json.dumps({'window_report':report},default=str),flush=True)
+        event('coverage',run_id=run_id,ordinal=window['ordinal'],articles=report['articles'],units=report['units'],
+              translated_units=report['translated_units'],missing_units=report['missing_units'],tokens=report['known_tokens'])
+        print(json.dumps({'run_id':run_id,'articles':report['articles'],'units':report['units'],
+                          'missing_units':report['missing_units'],'known_tokens':report['known_tokens']}),flush=True)
+        require_complete(report)
     finally:
         c.close()
         db.close()
 
 
 if __name__=='__main__':
-    main()
+    run_logged('translation', main)

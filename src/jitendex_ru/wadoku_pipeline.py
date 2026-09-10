@@ -356,6 +356,15 @@ def prepare_projection(value: dict[str, Any], *, versions: dict[str, str],
         if example.get("selection_state") == "accepted":
             unit = example_translation_unit(example, example["decision"]["source_path"])
             unit['example_source_context'] = copy.deepcopy(example['child_source_context'])
+            if versions['schema'] in {'rich-v5', 'rich-v6'}:
+                from .wadoku_quality import lexical_contract, tree_paths
+                nodes = {path: node for node, path in tree_paths(example['child_source_context'])}
+                source_path = example['decision']['source_path']
+                source_scope = max((p for p,n in nodes.items() if n['tag']=='sense' and source_path.startswith(p+'/')),
+                                   key=len, default=None)
+                unit.update(lexical_contract(nodes,source_scope,[source_path],unit['source_text']))
+            if versions['schema'] == 'rich-v6':
+                unit['task_type'] = 'example_translation'
             unit["projection_index"] = None
             result["units"].append(unit)
     for unit in result["units"]:
@@ -390,6 +399,10 @@ def projection_envelope(article: Any, units: list[Any], projection: dict[str, An
         unit["packet_id"] = unit.get("sense_path") or unit["semantic_id"]
         prepared.append(unit)
     context = copy.deepcopy(projection['context'])
+    if context.get('versions', {}).get('schema') in {'rich-v5', 'rich-v6'}:
+        # Translation confidence must not mirror unrelated lookup/owner uncertainty.
+        context.pop('article_group_decision', None)
+        context.pop('lookup_aliases', None)
     if projection.get('envelope_version') in {'selected-examples-v1', 'selected-examples-v2-source-order'}:
         examples = context.get('examples', [])
         context['example_selection_states'] = [

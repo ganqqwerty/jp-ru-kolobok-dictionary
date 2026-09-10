@@ -9,7 +9,7 @@ from jitendex_ru.wadoku_profile import load_profile, resolve_prompt
 
 def test_new_profile_is_rich_and_old_profile_is_not_reinterpreted():
     config = load_profile()
-    assert resolve_prompt(config, 'translation').name == 'translate_luna_wadoku_xml_ru_v9.txt'
+    assert resolve_prompt(config, 'translation').name == 'translate_luna_wadoku_xml_ru_v13.txt'
     assert resolve_prompt(config, 'review').name == 'review_luna_wadoku_xml_ru_v9.txt'
     with pytest.raises(ValueError, match='wadoku-xml-v3'):
         load_profile(Path('config.wadoku.xml.luna.toml'))
