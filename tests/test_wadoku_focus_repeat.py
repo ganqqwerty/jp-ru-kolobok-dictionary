@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from jitendex_ru.wadoku_classification import fixed_template_alias, make_request, response_schema, validate_decision
+from jitendex_ru.wadoku_classification import fixed_template_alias, make_request, response_schema, validate_decision, normalize_decision
 from jitendex_ru.wadoku_assembly import lookup_rows
 from jitendex_ru.wadoku_quality import translation_projection
 from jitendex_ru.wadoku_xml import canonical_entry, structured_entry, label_catalog
@@ -19,6 +19,8 @@ def test_boundary_alias_never_drops_internal_material():
     assert fixed_template_alias('新…', 'しん…', 'prefix_only') == ('新', 'しん')
     assert fixed_template_alias('何も…ない', 'なにも…ない', 'suffix_only') is None
     assert fixed_template_alias('新…', '…しん', 'prefix_only') is None
+    assert fixed_template_alias('…限り', 'かぎり', 'suffix_only') == ('限り', 'かぎり')
+    assert fixed_template_alias('何も…ない', 'なにもない', 'suffix_only') is None
     with pytest.raises(ValueError, match='fixed lexical'):
         lookup_rows([['何も…ない', 'なにも…ない']], [], {'lookup_aliases': [
             {'source_form': '何も…ない', 'expression': 'ない', 'reading': 'ない', 'kind': 'suffix_only'}]})
@@ -47,6 +49,12 @@ def test_prefix_schema_and_exact_evidence_are_required():
         'lookup_aliases': [{'source_form': '新…', 'expression': '新', 'reading': 'しん',
             'kind': 'prefix_only', 'evidence_path': '/entry[1]/form[1]/orth[1]', 'reason': 'Начальная часть.'}]}
     assert validate_decision(request, result) == []
+    wire = {**copy.deepcopy(result), 'examples': {}, 'selected_example_ids': []}
+    wire['lookup_aliases'][0]['evidence_path'] = '/entry/form/orth'
+    normalized, changes = normalize_decision(wire, request)
+    assert validate_decision(request, normalized) == []
+    assert changes[-1]['rule'] == 'source-prefix-evidence-path-v1'
+    assert wire['lookup_aliases'][0]['evidence_path'] == '/entry/form/orth'
     result['lookup_aliases'][0]['reading'] = 'あたら'
     assert validate_decision(request, result)
     request['response_schema_version'] = 'wadoku-structure-schema-v5'

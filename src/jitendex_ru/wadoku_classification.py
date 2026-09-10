@@ -19,9 +19,13 @@ def fixed_template_alias(source_form: str, reading: str, kind: str):
     if kind not in {'suffix_only', 'prefix_only'}:
         return None
     form_match, reading_match = re.fullmatch(pattern, source_form), re.fullmatch(pattern, reading)
-    if not form_match or not reading_match:
+    if not form_match:
         return None
-    return form_match[1].strip(), re.sub(r'\s+', '', reading_match[1])
+    # Some XML entries omit the boundary slot in hira. Keep that WHOLE reading,
+    # never infer a missing pronunciation or slice an unmarked reading.
+    if not reading_match and (not reading.strip() or re.search(r'[…~〜～]', reading)):
+        return None
+    return form_match[1].strip(), re.sub(r'\s+', '', reading_match[1] if reading_match else reading)
 
 
 def parse_response(text: str) -> dict[str, Any]:
@@ -99,7 +103,7 @@ def normalize_decision(result: dict[str, Any], request: dict[str, Any] | None = 
                             'rule':'display-heading-not-lookup-v1'})
             continue
         kept.append(alias)
-        if alias.get('kind') == 'suffix_only':
+        if alias.get('kind') in {'suffix_only', 'prefix_only'}:
             evidence_paths = [path for node, path in nodes
                               if node['tag'] == 'orth' and path.startswith('/entry[1]/form[1]/orth[')
                               and node['attributes'].get('midashigo') != 'true'
@@ -107,7 +111,7 @@ def normalize_decision(result: dict[str, Any], request: dict[str, Any] | None = 
             if evidence_paths and alias.get('evidence_path') not in evidence_paths:
                 changes.append({'path': f'/lookup_aliases/{index}/evidence_path',
                                 'original': alias.get('evidence_path'), 'replacement': evidence_paths[0],
-                                'rule': 'source-suffix-evidence-path-v1'})
+                                'rule': 'source-suffix-evidence-path-v1' if alias['kind'] == 'suffix_only' else 'source-prefix-evidence-path-v1'})
                 alias['evidence_path'] = evidence_paths[0]
         reading = alias.get('reading')
         if not isinstance(reading, str):
@@ -292,7 +296,7 @@ def validate_decision(request: dict[str, Any], result: dict[str, Any]) -> list[s
         if alias['kind'] in {'suffix_only', 'prefix_only'}:
             if (not str(alias['evidence_path']).startswith('/entry[1]/form[1]/orth[')
                     or paths.get(alias['evidence_path']) != alias['source_form']):
-                errors.append('suffix alias has no exact source-form evidence')
+                errors.append('boundary alias has no exact source-form evidence')
             expected = fixed_template_alias(alias['source_form'], reading, alias['kind'])
             if expected != (alias['expression'], alias['reading']):
                 errors.append('boundary alias loses fixed lexical material or is not aligned with source')
