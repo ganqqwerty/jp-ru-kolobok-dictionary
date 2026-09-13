@@ -162,15 +162,15 @@ WXR-LOOK-3 — Build the complete entry-ID and reference map before resolving a 
 
 WXR-LOOK-4 — Treat U+2026 `…` as an open lookup slot. Do not replace it blindly with the parent headword. For example, the parent of `…せずにはいられない` is `いる`; substituting `いる` would create a false expression. ASCII `~` inside `hatsuon` and wave marks used in ranges or titles are not open lookup slots.
 
-WXR-LOOK-5 — First create deterministic aliases from explicit Japanese evidence in the same entry, its linked entry, its Japanese examples, or an exact referenced form. An alias must contain no placeholder, must preserve the fixed Japanese part of the template, and must be a literal Japanese string that can occur in text. Record the exact evidence path and rule.
+WXR-LOOK-5 — First create deterministic aliases from explicit Japanese evidence in the same entry, its linked entry, its Japanese examples, or an exact referenced form. A full expansion preserves every fixed part. An internal-prefix anchor follows WXR-LOOK-15 instead: it preserves the full beginning in the key and the full construction in the body. Every key must be a literal string without a placeholder. Record the exact evidence path and rule.
 
 WXR-LOOK-6 — Also create a placeholder-free suffix alias by removing only the leading `…` when the remaining text is non-empty. This lets Yomitan find productive patterns when the user scans the fixed part. Label this method `ellipsis_suffix`. Do not claim that it represents every complete phrase.
 
 WXR-LOOK-7 — Send only entries that still need concrete aliases to a dedicated Luna lookup-expansion run. Give Luna the original forms and readings, fixed fragments, grammar, Japanese examples, parent context, reference type, and `subentrytype`. Luna returns Japanese lookup aliases only. It must not translate definitions or change source structure.
 
-WXR-LOOK-8 — Validate every Luna alias deterministically. Require valid Japanese text, no `…` or wildcard mark, no duplicate, preserved fixed fragment, a matching reading or an explicit generated reading, and provenance to the source template. Reject explanations, Russian or German text, invented senses, and aliases that only repeat another entry without an intentional shared lookup.
+WXR-LOOK-8 — Validate every Luna alias by its method. Require valid Japanese text, no wildcard mark, no duplicate, the correct fixed fragment, an aligned source reading, and source provenance. Internal-prefix keys preserve exactly the text before the first slot. Do not guess a prefix reading from an unmarked whole-phrase reading. Reject explanations, invented senses and accidental collisions; group intentional prefix collisions using WXR-LOOK-15.
 
-WXR-LOOK-9 — Keep entries classified as `independent_direct` searchable with their own sequence. `WIdiom`, `XSatz`, and `ZSprW` are strong independent signals. `VwBsp` is mixed and always follows WXR-GROUP. The parent relation may be shown as metadata and may guide translation.
+WXR-LOOK-9 — Keep entries classified as `independent_direct` searchable with their own sequence, except internal-prefix display groups described in WXR-LOOK-15. Grouping lookup anchors does not change lexical ownership. `WIdiom`, `XSatz`, and `ZSprW` are strong independent signals. `VwBsp` is mixed and always follows WXR-GROUP. The parent relation may guide translation.
 
 WXR-LOOK-10 — Do not create extra popup articles for alternative spellings or entries classified as `inherit_parent`. Emit a direct shared row only when `lookup_policy` is `shared_direct`. Emit no child row when it is `deinflect_to_parent`. Preserve child-only meaning as a form-restricted sense or section in the shared glossary.
 
@@ -181,6 +181,8 @@ WXR-LOOK-12 — The gate passes only when every template has at least one placeh
 WXR-LOOK-13 — Pack lookup-expansion batches by serialized byte size as well as article count. Use at most 25 entries and 24,576 bytes per worker request. Put an oversized entry in a singleton batch and fail before dispatch if it exceeds the hard request limit. Record input and output token use separately from Russian translation.
 
 WXR-LOOK-14 — Put every observed `subentrytype` in a reviewed policy table. The policy is a prior such as `strong_independent`, `productive_derivation`, `mixed`, or `structural_relation`; it is not the final article decision. Preparation fails on an unknown value.
+
+WXR-LOOK-15 — For an internal open slot, use the full fixed beginning as an `internal_prefix` key: `どうにか…する` → `どうにか`; `費用が…だけかかる` → `費用が`. Keep particles. Show the full Japanese construction and reading above its meanings and examples. Merge all such constructions with the same exact key and reading into one export row, even across batch and bank borders. Keep separate phrase sections and source provenance. Keep different readings and ordinary lexical entries separate. Use a stable synthetic group sequence, not a guessed parent ID. Do not copy phrase pitch or conjugation rules to the key. When there is no fixed beginning or no aligned reading, report the unresolved case. Do not invent slot fillings.
 
 ## WXR-IMP — Import implementation
 

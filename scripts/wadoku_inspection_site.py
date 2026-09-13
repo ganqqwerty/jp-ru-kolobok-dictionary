@@ -97,6 +97,11 @@ def export(run_id, root, scope, packet):
         title=f'Wadoku RU · стресс 200 · {run_id}',revision=f'stress200-run-{run_id}',source_url=config.raw['source']['url'],
         source_sha256=config.raw['source']['sha256'],export_audit_id=f'inspection-{run_id}',
         row_factory=lambda value,*args:rendered[value['entry_id']],description_note='Диагностический пилот. Только 200 выбранных исходных записей. Известные ошибки и неразрешённые шаблоны указаны на странице проверки. Не релиз.')
+    prefix_sequences = {(g['expression'],g['reading'],s):g['sequence']
+                        for g in report['prefix_lookup_groups'] for s in g['source_sequences']}
+    for eid, item in coverage.items():
+        item['sequences'] = sorted({prefix_sequences.get((r[0],r[1],r[6]),r[6])
+                                    for r in rendered[int(eid)][0]})
     report.update(validate_archive(output,Path('schemas/yomitan-77e200428902abf4fa48284df92da7af3dcb4162')))
     report.update(run_id=run_id,sha256=sha256_file(output),source_entries=200,release_approved=False,issues=issues,coverage=coverage)
     atomic_write(root/'export-report.json',canonical_json(report));return report

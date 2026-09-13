@@ -9,12 +9,23 @@ from typing import Any
 from .util import canonical_json, sha256_bytes
 from .wadoku_quality import tree_paths, plain
 
-REQUEST_VERSION = 'wadoku-structure-v6'
-RESPONSE_SCHEMA_VERSION = 'wadoku-structure-schema-v6'
+REQUEST_VERSION = 'wadoku-structure-v7'
+RESPONSE_SCHEMA_VERSION = 'wadoku-structure-schema-v7'
 
 
 def fixed_template_alias(source_form: str, reading: str, kind: str):
-    """Only remove a single boundary slot; never lose fixed lexical material."""
+    """Extract an exact boundary alias or the anchored start of a construction."""
+    if kind == 'internal_prefix':
+        # Keep all text before the FIRST slot, never the final segment or a
+        # concatenation across slots. The complete construction remains in body.
+        pattern = r'^([^…~〜～]+)[…~〜～]+(.+)$'
+        form_match = re.fullmatch(pattern, source_form.strip())
+        reading_match = re.fullmatch(pattern, reading.strip())
+        if not form_match or not reading_match:
+            return None  # An unmarked whole-phrase reading cannot be sliced safely.
+        if not re.search(r'[^…~〜～\s]', form_match[2]):
+            return None
+        return form_match[1].strip(), re.sub(r'\s+', '', reading_match[1])
     pattern = r'^[…~〜～]+([^…~〜～]+)$' if kind == 'suffix_only' else r'^([^…~〜～]+)[…~〜～]+$'
     if kind not in {'suffix_only', 'prefix_only'}:
         return None
@@ -64,7 +75,7 @@ def normalize_decision(result: dict[str, Any], request: dict[str, Any] | None = 
         raise ValueError('classification response must be an object')
     normalized = copy.deepcopy(result)
     changes = []
-    if request and request.get('response_schema_version') in {'wadoku-structure-schema-v4', 'wadoku-structure-schema-v5', 'wadoku-structure-schema-v6'}:
+    if request and request.get('response_schema_version') in {'wadoku-structure-schema-v4', 'wadoku-structure-schema-v5', 'wadoku-structure-schema-v6', 'wadoku-structure-schema-v7'}:
         import fastjsonschema
         fastjsonschema.compile(response_schema(request))(result)
         selected=result['selected_example_ids']
@@ -103,7 +114,7 @@ def normalize_decision(result: dict[str, Any], request: dict[str, Any] | None = 
                             'rule':'display-heading-not-lookup-v1'})
             continue
         kept.append(alias)
-        if alias.get('kind') in {'suffix_only', 'prefix_only'}:
+        if alias.get('kind') in {'suffix_only', 'prefix_only', 'internal_prefix'}:
             evidence_paths = [path for node, path in nodes
                               if node['tag'] == 'orth' and path.startswith('/entry[1]/form[1]/orth[')
                               and node['attributes'].get('midashigo') != 'true'
@@ -152,7 +163,9 @@ def response_schema(request: dict[str, Any], *, canonical: bool = False) -> dict
         'reason': {'type': 'string'},
     })
     alias = object_schema({'source_form': {'type': 'string','enum':template_forms or ['none']}, 'expression': {'type': 'string'},
-        'reading': {'type': 'string'}, 'kind': {'type': 'string', 'enum': ['full_expansion','suffix_only'] + (['prefix_only'] if request.get('response_schema_version') == 'wadoku-structure-schema-v6' else [])},
+        'reading': {'type': 'string'}, 'kind': {'type': 'string', 'enum': ['full_expansion','suffix_only']
+            + (['prefix_only'] if request.get('response_schema_version') in {'wadoku-structure-schema-v6','wadoku-structure-schema-v7'} else [])
+            + (['internal_prefix'] if request.get('response_schema_version') == 'wadoku-structure-schema-v7' else [])},
         'evidence_path': {'type': ['string','null']}, 'reason': {'type': 'string'}})
     schema = object_schema({
         'batch_id': {'type': 'string', 'const': request['batch_id']},
@@ -167,7 +180,7 @@ def response_schema(request: dict[str, Any], *, canonical: bool = False) -> dict
         'lookup_needs_review': {'type': ['string','null']},
         'examples': {'type': 'array', 'items': example, 'minItems':len(candidate_ids), 'maxItems':len(candidate_ids)},
     })
-    if request.get('response_schema_version') in {'wadoku-structure-schema-v4', 'wadoku-structure-schema-v5', 'wadoku-structure-schema-v6'} and not canonical:
+    if request.get('response_schema_version') in {'wadoku-structure-schema-v4', 'wadoku-structure-schema-v5', 'wadoku-structure-schema-v6', 'wadoku-structure-schema-v7'} and not canonical:
         schema['$defs']={'example':object_schema({
             'eligible':{'type':['boolean','null']},
             'source_path':{'type':['string','null']},
@@ -175,7 +188,7 @@ def response_schema(request: dict[str, Any], *, canonical: bool = False) -> dict
             'reason':{'type':'string'},
         })}
         schema['properties']['examples']=object_schema({key:{'$ref':'#/$defs/example'} for key in candidate_ids})
-        if request['response_schema_version'] in {'wadoku-structure-schema-v5', 'wadoku-structure-schema-v6'}:
+        if request['response_schema_version'] in {'wadoku-structure-schema-v5', 'wadoku-structure-schema-v6', 'wadoku-structure-schema-v7'}:
             sense_paths = [path for node, path in tree_paths(entry_tree(request['entry'])) if node['tag'] == 'sense']
             properties = {}
             for candidate in request['examples']:
@@ -293,7 +306,7 @@ def validate_decision(request: dict[str, Any], result: dict[str, Any]) -> list[s
             errors.append('alias source or output missing')
         if re.search(r'[…~〜～]', alias['expression']+alias['reading']):
             errors.append('unexpanded lookup alias')
-        if alias['kind'] in {'suffix_only', 'prefix_only'}:
+        if alias['kind'] in {'suffix_only', 'prefix_only', 'internal_prefix'}:
             if (not str(alias['evidence_path']).startswith('/entry[1]/form[1]/orth[')
                     or paths.get(alias['evidence_path']) != alias['source_form']):
                 errors.append('boundary alias has no exact source-form evidence')

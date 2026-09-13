@@ -31,11 +31,26 @@ def lookup_rows(rows, metadata, decision):
         for alias in aliases:
             if not alias.get('expression') or not alias.get('reading') or TEMPLATE_RE.search(alias['expression'] + alias['reading']):
                 raise ValueError('lookup alias is not a concrete expression/reading')
-            if alias.get('kind') in {'suffix_only', 'prefix_only'} and fixed_template_alias(
+            if alias.get('kind') in {'suffix_only', 'prefix_only', 'internal_prefix'} and fixed_template_alias(
                     row[0], row[1], alias['kind']) != (alias['expression'], alias['reading']):
                 raise ValueError('lookup alias loses fixed lexical material or reading alignment')
             mapped = copy.deepcopy(row)
             mapped[0], mapped[1] = alias['expression'], alias['reading']
+            if alias.get('kind') == 'internal_prefix':
+                # Scope every definition/example to the FULL source phrase.
+                # This marker also lets the common writer group across batches.
+                mapped[5] = [{'type':'structured-content', 'content':{
+                    'tag':'div', 'data':{'content':'internal-prefix-construction'},
+                    'content':[
+                        {'tag':'div', 'lang':'ja', 'style':{'fontWeight':'bold'},
+                         'content':row[0] + '【' + row[1] + '】'},
+                        *([{'tag':'div', 'data':{'content':'construction-tags'},
+                            'content':' '.join(filter(None, [row[2], row[7]]))}]
+                          if row[2] or row[7] else []),
+                        *[g['content'] if isinstance(g,dict) and g.get('type')=='structured-content' else g
+                          for g in mapped[5]],
+                    ]}}]
+                mapped[2] = mapped[3] = mapped[7] = ''
             result.append(mapped)
     # Template pitch cannot be transferred to an expanded word or a suffix.
     return result, [m for m in metadata if m[0] not in template_terms]

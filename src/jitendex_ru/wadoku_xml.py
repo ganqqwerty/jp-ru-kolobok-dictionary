@@ -953,6 +953,8 @@ def build_rich_archive(
     meta_buffer: list[list[Any]] = []
     scoped_pitch_tags: set[str] = set()
     sequence_owners: dict[int, int] = {}
+    prefix_rows: dict[tuple[str, str], list[list[Any]]] = {}
+    prefix_groups = []
 
     def write(archive: zipfile.ZipFile, name: str, data: bytes) -> None:
         _write_zip_member(archive, name, data)
@@ -974,7 +976,15 @@ def build_rich_archive(
                 owner = sequence_owners.setdefault(row[6], value["entry_id"])
                 if owner != value["entry_id"]:
                     raise ValueError(f"Yomitan sequence collision: {row[6]}")
-            term_buffer.extend(rows)
+            for row in rows:
+                if (len(row[5]) == 1 and isinstance(row[5][0], dict)
+                        and isinstance(row[5][0].get('content'), dict)
+                        and row[5][0].get('content', {}).get('data', {}).get('content')
+                        == 'internal-prefix-construction'):
+                    prefix_rows.setdefault((row[0], row[1]), []).append(row)
+                else:
+                    term_buffer.append(row)
+                    term_count += 1
             meta_buffer.extend(metadata)
             for _term, kind, payload in metadata:
                 if kind == "pitch":
@@ -982,7 +992,6 @@ def build_rich_archive(
                                              for tag in pitch.get("tags", [])
                                              if tag.startswith("wdx-sense-"))
             entry_count += 1
-            term_count += len(rows)
             meta_count += len(metadata)
             while len(term_buffer) >= 10_000:
                 term_bank_number += 1
@@ -994,6 +1003,29 @@ def build_rich_archive(
                 write(archive, f"term_meta_bank_{meta_bank_number}.json",
                       canonical_json(meta_buffer[:10_000]))
                 del meta_buffer[:10_000]
+        # Collect only prefix construction rows until the end, so equal keys
+        # merge even across source entries, windows and 10,000-row bank borders.
+        for key, members in sorted(prefix_rows.items()):
+            sequence = (1 << 52) + int(sha256_bytes(canonical_json(key))[:13], 16)
+            if sequence in sequence_owners:
+                raise ValueError(f'prefix group sequence collision: {sequence}')
+            sequence_owners[sequence] = -1
+            content = []
+            seen = set()
+            for row in sorted(members, key=lambda r: (r[6], canonical_json(r[5]))):
+                identity = (row[6], canonical_json(row[5]))
+                if identity not in seen:
+                    seen.add(identity)
+                    content.extend(row[5])
+            term_buffer.append([*key, '', '', 0, content, sequence, ''])
+            term_count += 1
+            prefix_groups.append({'expression':key[0], 'reading':key[1], 'sequence':sequence,
+                                  'source_entry_ids':sorted({sequence_owners[r[6]] for r in members}),
+                                  'source_sequences':sorted({r[6] for r in members})})
+            if len(term_buffer) >= 10_000:
+                term_bank_number += 1
+                write(archive, f'term_bank_{term_bank_number}.json', canonical_json(term_buffer[:10_000]))
+                del term_buffer[:10_000]
         if term_buffer:
             term_bank_number += 1
             write(archive, f"term_bank_{term_bank_number}.json", canonical_json(term_buffer))
@@ -1013,5 +1045,5 @@ def build_rich_archive(
         "entries": entry_count, "term_rows": term_count, "term_meta_rows": meta_count,
         "term_banks": term_bank_number, "term_meta_banks": meta_bank_number,
         "tag_rows": len(tags), "files": file_hashes, "file_bytes": file_bytes,
-        "zip_sha256": sha256_file(output),
+        "zip_sha256": sha256_file(output), "prefix_lookup_groups": prefix_groups,
     }
