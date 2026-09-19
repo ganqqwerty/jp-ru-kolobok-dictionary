@@ -4,13 +4,20 @@ import xml.etree.ElementTree as ET
 from jitendex_ru.wadoku_classification import make_request, validate_decision, normalize_decision, source_context, entry_tree
 from jitendex_ru.wadoku_quality import example_candidates
 from jitendex_ru.wadoku_xml import canonical_entry
-from wadoku_classify_window import output_reserve
+from wadoku_classify_window import output_reserve, request_timeout
 
 
 def test_classification_output_reserve_fits_observed_large_example_sets():
     assert output_reserve(0) == 4096
     assert output_reserve(56) == 9888
     assert 117897 + output_reserve(56) <= 128000
+
+
+def test_classification_timeout_scales_for_example_heavy_entries():
+    assert request_timeout(0) == 240
+    assert request_timeout(7) == 240
+    assert request_timeout(52) == 596
+    assert request_timeout(100) == 600
 
 
 def test_classification_is_source_bound_and_ambiguity_is_allowed():

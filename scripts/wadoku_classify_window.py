@@ -20,11 +20,17 @@ from jitendex_ru.wadoku_retry import retry_prompt, save_runtime_prompt
 from jitendex_ru.wadoku_telemetry import event, logged_dispatch, run_logged
 
 CLASSIFICATION_RUNTIME_MARGIN = 16_384
+MAX_CLASSIFICATION_ATTEMPTS = 5
 
 
 def output_reserve(example_count: int) -> int:
     """Reserve measured structured output while keeping complete source input."""
     return max(4096, 2048 + 140 * example_count)
+
+
+def request_timeout(example_count: int) -> int:
+    """Give example-heavy entries enough time without slowing ordinary failures."""
+    return min(600, max(240, 180 + 8 * example_count))
 
 
 def main():
@@ -117,7 +123,7 @@ def main():
                 (args.scope_id,row['entry_id']))]
             request=make_request(entry,[parents[k] for k in sorted(parent_ids)],candidates,args.scope_id,prompt_hash)
             previous_count=connection.execute('SELECT count(*) FROM attempt WHERE batch_id=?', (request['batch_id'],)).fetchone()[0]
-            if previous_count >= 3:
+            if previous_count >= MAX_CLASSIFICATION_ATTEMPTS:
                 continue  # Exhausted work must not starve untouched entries in later windows.
             schema=response_schema(request)
             # Bound supplied text by UTF-8 bytes; CLI also adds runtime instructions.
@@ -163,11 +169,12 @@ def main():
             state = connection.execute('SELECT state FROM batch WHERE id=?', (request['batch_id'],)).fetchone()[0]
             if state == 'blocked':
                 failures = connection.execute('SELECT count(*) FROM attempt WHERE batch_id=?', (request['batch_id'],)).fetchone()[0]
-                if failures >= 3:
+                if failures >= MAX_CLASSIFICATION_ATTEMPTS:
                     print(json.dumps({'entry_id': request['entry']['entry_id'], 'retry_exhausted': True}), flush=True)
                     continue
                 connection.execute("UPDATE batch SET state='ready' WHERE id=? AND state='blocked'", (request['batch_id'],))
-                audit(connection, 'wadoku_classification_retry', 'batch', request['batch_id'], {'previous_attempts': failures, 'limit': 3})
+                audit(connection, 'wadoku_classification_retry', 'batch', request['batch_id'],
+                      {'previous_attempts': failures, 'limit': MAX_CLASSIFICATION_ATTEMPTS})
                 connection.commit()
             runtime_prompt = retry_prompt(connection, request['batch_id'], prompt)
             input_bound += len(runtime_prompt.encode()) - len(prompt.encode())
@@ -181,7 +188,9 @@ def main():
             connection.commit()
             started=time.monotonic()
             event('attempt_queued', run_id=run_id, entry_id=request['entry']['entry_id'], batch_id=item['batch_id'], attempt_id=item['attempt_id'])
-            future=executor.submit(logged_dispatch,dispatch_one,item,runtime_prompt,'classification',request_timeout_seconds=240,output_schema=schema)
+            timeout_seconds = request_timeout(len(request['examples']))
+            future=executor.submit(logged_dispatch,dispatch_one,item,runtime_prompt,'classification',
+                                   request_timeout_seconds=timeout_seconds,output_schema=schema)
             futures[future]=(request,item,input_bound,reserved_output,started)
         for future in as_completed(futures):
             request,item,input_bound,reserved_output,started=futures[future]
