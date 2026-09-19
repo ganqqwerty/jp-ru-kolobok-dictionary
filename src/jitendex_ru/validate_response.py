@@ -653,6 +653,8 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
     if actual_ids != expected_ids:
         issues.append({"code": "unit_order_or_set_mismatch", "expected": expected_ids, "actual": actual_ids})
         return issues
+    if wadoku_xml:
+        issues.extend(wadoku_cross_article_duplicate_issues(expected, translations))
     wadoku_exact_source: set[str] = set()
     if run["pipeline_version"] == "wadoku-xml-v2":
         article_ids = sorted({row["article_id"] for row in expected})
@@ -826,6 +828,42 @@ def validate_worker_payload(connection: ConnectionLike, attempt: RowLike, payloa
                         "unit_id": source["id"],
                         "tokens": residual_english,
                     })
+    return issues
+
+
+def wadoku_cross_article_duplicate_issues(
+    expected: list[RowLike], translations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reject the narrow duplicate signature left by a shifted batch response."""
+    groups: dict[str, list[tuple[RowLike, dict[str, Any]]]] = {}
+    for source, item in zip(expected, translations):
+        role = source["role"]
+        if role in {"etymology", "example_translation"}:
+            continue
+        target = item.get("target_text")
+        if not isinstance(target, (str, list)):
+            continue
+        target_key = canonical_json(target).decode()
+        readable = " ".join(target) if isinstance(target, list) and all(
+            isinstance(value, str) for value in target
+        ) else target
+        if not isinstance(readable, str) or len(CYRILLIC_RE.findall(readable)) < 12:
+            continue
+        groups.setdefault(target_key, []).append((source, item))
+    issues = []
+    for target_key, rows in groups.items():
+        article_ids = {int(source["article_id"]) for source, _item in rows}
+        source_texts = {source["source_text"] for source, _item in rows}
+        roles = {source["role"] for source, _item in rows}
+        if len(article_ids) < 2 or len(source_texts) < 2 or len(roles) != 1:
+            continue
+        issues.append({
+            "code": "wadoku_cross_article_duplicate_target",
+            "unit_ids": [source["id"] for source, _item in rows],
+            "article_ids": sorted(article_ids),
+            "role": next(iter(roles)),
+            "target_text": json.loads(target_key),
+        })
     return issues
 
 

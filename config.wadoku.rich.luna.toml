@@ -13,7 +13,7 @@ checkout_timeout_seconds = 10
 extractor = "wadoku-xml-v3"
 terminology = "terminology-ru-v1"
 pipeline = "wadoku-xml-v3"
-translation_prompt = "translate-luna-wadoku-xml-ru-v17"
+translation_prompt = "translate-luna-wadoku-xml-ru-v18"
 article_group_prompt = "classify-luna-wadoku-structure-v10"
 article_group_rules = "wadoku-rich-classification-v10"
 lookup_expansion_prompt = "classify-luna-wadoku-structure-v10"
@@ -55,7 +55,7 @@ title = "Wadoku RU — пилот"
 revision = "2026.07.05.0-wadoku-rich-ru"
 
 [rich.prompts]
-translation = "prompts/translate_luna_wadoku_xml_ru_v17.txt"
+translation = "prompts/translate_luna_wadoku_xml_ru_v18.txt"
 review = "prompts/review_luna_wadoku_xml_ru_v9.txt"
 classification = "prompts/classify_luna_wadoku_structure_v10.txt"
 transcription = "prompts/resolve_luna_wadoku_transcriptions_v1.txt"

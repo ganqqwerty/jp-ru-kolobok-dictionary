@@ -4,9 +4,40 @@ import pytest
 from jitendex_ru.db import connect, initialize
 from jitendex_ru.validate_response import (
     _plain_text_issues, allows_japanese_grammar_label, ingest_response, validate_worker_payload,
+    wadoku_cross_article_duplicate_issues,
     wadoku_target_issues, wadoku_xml_block_allows_exact_source,
     wadoku_xml_block_is_scientific,
 )
+
+
+def test_wadoku_cross_article_duplicate_gate_targets_shift_signature():
+    expected = [
+        {"id": "u1", "article_id": 1, "role": "glossary_set", "source_text": '["Imid"]'},
+        {"id": "u2", "article_id": 2, "role": "glossary_set", "source_text": '["Anwendung"]'},
+    ]
+    translations = [
+        {"target_text": ["применение", "использование"]},
+        {"target_text": ["применение", "использование"]},
+    ]
+    assert wadoku_cross_article_duplicate_issues(expected, translations) == [{
+        "code": "wadoku_cross_article_duplicate_target",
+        "unit_ids": ["u1", "u2"],
+        "article_ids": [1, 2],
+        "role": "glossary_set",
+        "target_text": ["применение", "использование"],
+    }]
+
+
+def test_wadoku_cross_article_duplicate_gate_allows_shared_etymology():
+    expected = [
+        {"id": "u1", "article_id": 1, "role": "etymology", "source_text": "von engl. x"},
+        {"id": "u2", "article_id": 2, "role": "etymology", "source_text": "aus d. Engl. x"},
+    ]
+    translations = [
+        {"target_text": "из английского языка x"},
+        {"target_text": "из английского языка x"},
+    ]
+    assert wadoku_cross_article_duplicate_issues(expected, translations) == []
 
 
 def fixture_db(tmp_path):
