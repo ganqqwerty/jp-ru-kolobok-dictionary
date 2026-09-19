@@ -139,6 +139,8 @@ def main():
                 prompt_hash,sha256_bytes(b''),sha256_bytes(b''),'{}','wadoku-structure-v2',identity)).fetchone()[0])
         connection.commit()
         futures={}
+        window_started=time.monotonic()
+        completed=accepted_count=0
         event('stage_prepared', run_id=run_id, scope_id=args.scope_id, tasks=len(requests), concurrency=args.concurrency)
         for request,schema,input_bound,output_reserve in requests:
             path=args.work_dir/'inbox'/f"{request['batch_id']}.json"
@@ -219,9 +221,18 @@ def main():
             connection.commit()
             event('attempt_result', run_id=run_id, entry_id=request['entry']['entry_id'], batch_id=item['batch_id'],
                   attempt_id=item['attempt_id'], status=status, errors=errors, latency_ms=result.latency_ms)
+            completed += 1
+            accepted_count += status == 'accepted'
+            event('classification_progress', run_id=run_id, total=len(requests), completed=completed,
+                  remaining=len(requests)-completed, accepted=accepted_count,
+                  elapsed_s=round(time.monotonic()-window_started, 3))
             print(json.dumps({'entry_id':request['entry']['entry_id'],'attempt_id':item['attempt_id'],'seconds':round(time.monotonic()-started,2),
                              'usage':result.usage,'errors':errors,'policy':payload.get('article_policy') if payload else None},ensure_ascii=False),flush=True)
             # Drain the whole bounded window; never abandon another live response.
+        summary={'tasks':len(requests),'completed':completed,'accepted':accepted_count,
+                 'rejected':completed-accepted_count,'elapsed_s':round(time.monotonic()-window_started,3)}
+        event('classification_window_finished',run_id=run_id,**summary)
+        print(json.dumps({'classification_window':summary}),flush=True)
     finally:
         executor.shutdown(wait=True)
         connection.close()

@@ -1,10 +1,11 @@
-"""Run one frozen 100-entry comparison, with bounded retries and a shared timeline."""
+"""Run one frozen comparison or source prefix with bounded worker loads."""
 import argparse
 import json
 from pathlib import Path
 import subprocess
 import sys
 import time
+import math
 
 from jitendex_ru.database import Database
 from jitendex_ru.wadoku_profile import load_profile
@@ -27,6 +28,7 @@ def main():
         raise ValueError('isolated pilot PostgreSQL required')
     db = Database(config)
     args.work_dir.mkdir(parents=True, exist_ok=True)
+    pipeline_started = time.monotonic()
     def stage(name, command):
         started = time.monotonic()
         log = args.work_dir / (name + '.console.log')
@@ -36,19 +38,36 @@ def main():
         event('stage_finished', name=name, returncode=result.returncode, duration_s=round(time.monotonic()-started, 3))
         if result.returncode:
             raise RuntimeError(f'{name} failed with {result.returncode}; see {log}')
+        return log
     try:
         with db.connect() as c:
+            scope = c.execute('SELECT manifest_json FROM wadoku_scope WHERE id=?',(args.scope_id,)).fetchone()
             count = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=?',(args.scope_id,)).fetchone()[0]
-        if count not in {100,200}:
-            raise ValueError('repeat requires exactly 100 or 200 frozen source entries')
-        for attempt in range(1, 4):
+        if not scope:
+            raise ValueError('scope is absent')
+        manifest = json.loads(scope[0])
+        prefix5000 = manifest.get('version') == 'wadoku-prefix-scope-v1' and manifest.get('prefix_size') == 5000
+        if count != manifest.get('entry_count') or (count not in {100,200} and not prefix5000):
+            raise ValueError('runner requires a 100/200 pilot or the frozen first-5000 source scope')
+        event('pipeline_progress', phase='classification', total=count, completed=0, remaining=count,
+              elapsed_s=round(time.monotonic()-pipeline_started, 3))
+        max_windows = math.ceil(count / 200) * 3
+        for attempt in range(1, max_windows + 1):
             with db.connect() as c:
                 missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',(args.scope_id,)).fetchone()[0]
             if not missing:
                 break
-            stage(f'classification-pass{attempt}', ['scripts/wadoku_classify_window.py', '--scope-id', args.scope_id,
-                '--limit', str(count), '--concurrency', str(args.concurrency), '--context-budget', '128000',
+            log = stage(f'classification-window{attempt:03d}', ['scripts/wadoku_classify_window.py', '--scope-id', args.scope_id,
+                '--limit', str(min(200, missing)), '--concurrency', str(args.concurrency), '--context-budget', '128000',
                 '--work-dir', str(args.work_dir / 'classification'), '--event-log', str(args.work_dir / 'classification.jsonl')])
+            summary = next((json.loads(line)['classification_window'] for line in reversed(log.read_text().splitlines())
+                            if line.startswith('{"classification_window"')), None)
+            with db.connect() as c:
+                missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',(args.scope_id,)).fetchone()[0]
+            event('pipeline_progress', phase='classification', total=count, completed=count-missing, remaining=missing,
+                  window=attempt, window_summary=summary, elapsed_s=round(time.monotonic()-pipeline_started, 3))
+            if summary and summary['tasks'] == 0:
+                break
         with db.connect() as c:
             missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',(args.scope_id,)).fetchone()[0]
         event('classification_coverage', total=count, unresolved=missing)
@@ -59,6 +78,7 @@ def main():
             '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '128000',
             '--event-log', str(args.work_dir / 'translation.jsonl')])
         event('pipeline_finished', scope_id=args.scope_id, classification_unresolved=missing,
+              total_articles=count, elapsed_s=round(time.monotonic()-pipeline_started, 3),
               note='Translation completion is not semantic approval; main-thread review follows.')
     finally:
         db.close()

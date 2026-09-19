@@ -147,6 +147,57 @@ def inventory(source: Path, core_path: Path, *, expected_sha256: str, size: int 
     return {'manifest': manifest, 'entries': entries, 'candidates': candidates}
 
 
+def prefix_inventory(source: Path, *, expected_sha256: str, size: int) -> dict[str, Any]:
+    """Freeze the first N source entries and all context needed to process them."""
+    if not 1 <= size <= EXPECTED_COUNTS['entries']:
+        raise ValueError('prefix scope size is outside the source inventory')
+    if sha256_file(source) != expected_sha256:
+        raise ValueError('source XML hash mismatch')
+    entries = []
+    selected: set[int] = set()
+    parent_ids: set[int] = set()
+    for ordinal, value in iter_canonical_entries(source):
+        if ordinal > size:
+            break
+        entry_id = int(value['entry_id'])
+        selected.add(entry_id)
+        entries.append({'ordinal': ordinal, 'entry_id': entry_id, 'categories': ['source-prefix'],
+                        'source': value, 'source_sha256': sha256_bytes(canonical_json(value))})
+        parent_ids.update(int(node['attributes']['id']) for node, _ in tree_paths(value['tree'])
+                          if node['tag'] in {'ref', 'sref'} and node['attributes'].get('type') == 'main'
+                          and node['attributes'].get('id'))
+    if len(entries) != size or len(selected) != size:
+        raise ValueError('source prefix is incomplete or contains duplicate entry IDs')
+    candidates: list[dict[str, Any]] = []
+    parent_contexts: dict[str, dict[str, Any]] = {}
+    reference_targets: dict[str, dict[str, str]] = {}
+    source_count = 0
+    for _ordinal, value in iter_canonical_entries(source):
+        source_count += 1
+        entry_id = int(value['entry_id'])
+        if entry_id in parent_ids:
+            parent_contexts[str(entry_id)] = value
+        if entry_id in parent_ids:
+            expression, reading, _sequence = canonical_identity(value)
+            reference_targets[str(entry_id)] = {'expression': expression, 'reading': reading}
+        candidates.extend(example_candidates([value], selected))
+    if source_count != EXPECTED_COUNTS['entries']:
+        raise ValueError('full XML entry count differs')
+    missing_parents = parent_ids - {int(key) for key in parent_contexts}
+    if missing_parents:
+        raise ValueError(f'main-reference contexts absent: {sorted(missing_parents)}')
+    manifest = {'version': 'wadoku-prefix-scope-v1', 'xml_sha256': expected_sha256,
+                'entry_count': len(entries), 'source_entry_count': source_count,
+                'candidate_count': len(candidates), 'category_counts': {'source-prefix': len(entries)},
+                'parent_contexts': parent_contexts, 'reference_targets': reference_targets,
+                'prefix_size': size, 'selection_rule': 'first-source-entries-v1'}
+    manifest['scope_id'] = sha256_bytes(canonical_json(
+        [manifest, [(entry['entry_id'], entry['source_sha256']) for entry in entries]]))
+    if sha256_file(source) != expected_sha256:
+        raise ValueError('source changed while inventorying')
+    return {'manifest': manifest, 'entries': entries, 'candidates': candidates}
+
+
 def store_scope(connection: Any, snapshot_id: int, data: dict[str, Any]) -> dict[str, Any]:
     manifest = data['manifest']
     scope_id = manifest['scope_id']

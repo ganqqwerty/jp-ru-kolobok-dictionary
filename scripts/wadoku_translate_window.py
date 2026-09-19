@@ -126,6 +126,7 @@ def dispatch_batch(config,run_id,batch,work,prompt,context_budget,database=None)
 
 def dispatch_window(config,c,run_id,ordinal,work,prompt,context_budget,max_batches,concurrency):
     remaining=max_batches*3
+    started=time.monotonic()
     database=Database(config)
     failures={}
     try:
@@ -151,6 +152,14 @@ def dispatch_window(config,c,run_id,ordinal,work,prompt,context_budget,max_batch
                         failures[batch_id]=str(error)
                         event('batch_exception',run_id=run_id,batch_id=batch_id,error_type=type(error).__name__,
                               error=str(error),traceback=traceback.format_exc())
+                    if hasattr(c, 'execute'):
+                        total_articles=c.execute('SELECT count(*) FROM run_article WHERE run_id=?',(run_id,)).fetchone()[0]
+                        completed_articles=c.execute('''SELECT count(*) FROM run_article ra WHERE ra.run_id=?
+                            AND NOT EXISTS (SELECT 1 FROM translation_unit u WHERE u.run_id=ra.run_id AND u.article_id=ra.article_id
+                                AND NOT EXISTS (SELECT 1 FROM translation t WHERE t.run_id=u.run_id AND t.unit_id=u.id))''',(run_id,)).fetchone()[0]
+                        event('translation_progress',run_id=run_id,total=total_articles,completed=completed_articles,
+                              remaining=total_articles-completed_articles,
+                              elapsed_s=round(time.monotonic()-started,3))
             if failures:
                 raise RuntimeError(f'{len(failures)} batches failed unexpectedly; see event log: {sorted(failures)}')
     finally:
@@ -192,8 +201,8 @@ def main():
         raise ValueError('candidate scope always includes the entire frozen pilot')
     if args.run_id is None and (not args.scope_id or (not args.entry_ids and not args.candidate_scope)):
         raise ValueError('new preparation requires --scope-id and --entry-ids')
-    if not 1 <= args.max_batches <= 200 or (args.entry_ids and not 1 <= len(args.entry_ids) <= 10):
-        raise ValueError('choose 1–200 batches, or 1–10 diagnostic entries')
+    if not 1 <= args.max_batches <= 5000 or (args.entry_ids and not 1 <= len(args.entry_ids) <= 10):
+        raise ValueError('choose 1–5000 batches, or 1–10 diagnostic entries')
     if not 1 <= args.concurrency <= 100:
         raise ValueError('concurrency must be 1–100')
     if args.articles_per_batch is not None and (not 1 <= args.articles_per_batch <= 100 or args.run_id is not None):
@@ -228,9 +237,12 @@ def main():
                 raise ValueError('scope absent')
             if args.candidate_scope:
                 scoped=c.execute('SELECT entry_id,decision_json FROM wadoku_scope_entry WHERE scope_id=? ORDER BY ordinal', (args.scope_id,)).fetchall()
-                focused = json.loads(scope['manifest_json']).get('version') == 'wadoku-focused-scope-v1'
-                if not (focused and len(scoped) == 100) and not 150 <= len(scoped) <= 200:
-                    raise ValueError('candidate pilot needs 150–200 entries, or exactly 100 in a focused scope')
+                scope_manifest = json.loads(scope['manifest_json'])
+                focused = scope_manifest.get('version') == 'wadoku-focused-scope-v1'
+                prefix_scope = (scope_manifest.get('version') == 'wadoku-prefix-scope-v1'
+                                and scope_manifest.get('prefix_size') == len(scoped))
+                if not prefix_scope and not (focused and len(scoped) == 100) and not 150 <= len(scoped) <= 200:
+                    raise ValueError('candidate scope size or manifest is unsupported')
                 if candidate_subset:
                     scoped = [r for r in scoped if r['entry_id'] in candidate_subset]
                     if len(scoped) != len(candidate_subset):
