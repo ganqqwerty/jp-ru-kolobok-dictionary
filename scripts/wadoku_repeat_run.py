@@ -12,6 +12,18 @@ from jitendex_ru.wadoku_profile import load_profile
 from jitendex_ru.wadoku_telemetry import event, run_logged
 
 
+def translation_run_id(log: Path) -> int:
+    for line in reversed(log.read_text().splitlines()):
+        if not line.startswith('{'):
+            continue
+        payload = json.loads(line)
+        if 'run_id' in payload:
+            return int(payload['run_id'])
+        if 'prepared' in payload and 'run_id' in payload['prepared']:
+            return int(payload['prepared']['run_id'])
+    raise RuntimeError('translation completed without a parseable run ID')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--scope-id', required=True)
@@ -96,12 +108,29 @@ def main():
             '--candidate-scope', '--max-batches', str(min(5000, count)),
             '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '128000',
             '--event-log', str(args.work_dir / 'translation.jsonl')])
-        translation_result=next((json.loads(line) for line in reversed(translation_log.read_text().splitlines())
-                                 if line.startswith('{"run_id"')),None)
-        if not translation_result:
-            raise RuntimeError('translation completed without a parseable run summary')
+        run_id = translation_run_id(translation_log)
+        translation_window = 1
+        while True:
+            with db.connect() as c:
+                ready = c.execute("SELECT count(*) FROM batch WHERE run_id=? AND kind='translation' AND state='ready'",
+                                  (run_id,)).fetchone()[0]
+                translated_articles = c.execute('''SELECT count(DISTINCT tu.article_id) FROM translation t
+                    JOIN translation_unit tu ON tu.id=t.unit_id WHERE t.run_id=?''', (run_id,)).fetchone()[0]
+            event('pipeline_progress', phase='translation', run_id=run_id, total=count,
+                  completed=translated_articles, remaining=max(0, count-translated_articles),
+                  ready_batches=ready, window=translation_window,
+                  elapsed_s=round(time.monotonic()-pipeline_started, 3))
+            if not ready:
+                break
+            translation_window += 1
+            translation_log = stage(f'translation-window{translation_window:03d}',
+                ['scripts/wadoku_translate_window.py', '--run-id', str(run_id),
+                 '--max-batches', '5000', '--concurrency', str(args.concurrency),
+                 '--context-budget', '128000', '--event-log', str(args.work_dir / 'translation.jsonl')])
+            if translation_run_id(translation_log) != run_id:
+                raise RuntimeError('translation resume changed the frozen run identity')
         stage('progress-report', ['scripts/wadoku_progress_report.py','--scope-id',args.scope_id,
-            '--run-id',str(translation_result['run_id']),'--log-dir',str(args.work_dir),
+            '--run-id',str(run_id),'--log-dir',str(args.work_dir),
             '--output',str(args.work_dir/'progress-report.json')])
         event('pipeline_finished', scope_id=args.scope_id, classification_unresolved=missing,
               total_articles=count, elapsed_s=round(time.monotonic()-pipeline_started, 3),
