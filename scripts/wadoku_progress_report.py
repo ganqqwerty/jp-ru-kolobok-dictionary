@@ -10,6 +10,7 @@ import random
 from jitendex_ru.database import Database
 from jitendex_ru.util import atomic_write, canonical_json
 from jitendex_ru.wadoku_profile import load_profile
+from jitendex_ru.wadoku_xml import canonical_identity
 from wadoku_run_report import summarize
 
 
@@ -63,8 +64,25 @@ def build(scope_id, log_dir, run_id=None):
                             WHERE latest.run_id=u.run_id AND latest.unit_id=u.id ORDER BY latest.id DESC LIMIT 1) t ON true
                             WHERE u.run_id=? AND u.article_id=? ORDER BY u.json_pointer''',(run_id,row[0])).fetchall()]
                     random_article={'batch_id':last_batch['id'],'finished_at':str(last_batch['completed_at']),
+                        'stage':'translation',
                         'entry_id':article['sequence'],'expression':article['expression'],'reading':article['reading'],
                         'translations':targets[:8]}
+            if random_article is None:
+                classified_batch=c.execute('''SELECT b.id,b.manifest_path,a.completed_at FROM batch b
+                    JOIN attempt a ON a.batch_id=b.id JOIN run r ON r.id=b.run_id
+                    WHERE b.kind='classification' AND a.outcome='accepted' AND r.selection_sha256=?
+                    ORDER BY a.completed_at DESC,a.id DESC LIMIT 1''',(scope_id,)).fetchone()
+                if classified_batch:
+                    request=json.loads(Path(classified_batch['manifest_path']).read_text())
+                    entry_id=int(request['entry']['entry_id'])
+                    source=c.execute('SELECT source_json,decision_json FROM wadoku_scope_entry WHERE scope_id=? AND entry_id=?',
+                                     (scope_id,entry_id)).fetchone()
+                    expression,reading,_=canonical_identity(json.loads(source['source_json']))
+                    decision=json.loads(source['decision_json'])['result'] if source['decision_json'] else None
+                    random_article={'batch_id':classified_batch['id'],'finished_at':str(classified_batch['completed_at']),
+                        'stage':'classification','entry_id':entry_id,'expression':expression,'reading':reading,
+                        'article_policy':decision.get('article_policy') if decision else None,
+                        'lookup_policy':decision.get('lookup_policy') if decision else None}
     finally:
         db.close()
     failed=timeline['failed_attempts']; classes=Counter(error_class(item.get('errors') or item) for item in failed)
