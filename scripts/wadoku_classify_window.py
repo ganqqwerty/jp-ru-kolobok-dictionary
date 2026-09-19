@@ -19,6 +19,8 @@ from jitendex_ru.wadoku_profile import DEFAULT_PROFILE, load_profile, resolve_pr
 from jitendex_ru.wadoku_retry import retry_prompt, save_runtime_prompt
 from jitendex_ru.wadoku_telemetry import event, logged_dispatch, run_logged
 
+CLASSIFICATION_RUNTIME_MARGIN = 16_384
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -115,8 +117,11 @@ def main():
                 continue  # Exhausted work must not starve untouched entries in later windows.
             schema=response_schema(request)
             # Bound supplied text by UTF-8 bytes; CLI also adds runtime instructions.
-            # Keep a separate 32k margin and compare it with actual reported usage.
-            input_bound=len(prompt.encode())+len(canonical_json(request))+len(canonical_json(schema))+32768
+            # Requests and schemas are measured as UTF-8 bytes, which already
+            # overestimates their token use. Keep a separate 16 KiB allowance
+            # for CLI/runtime instructions and compare it with reported usage.
+            input_bound=(len(prompt.encode())+len(canonical_json(request))
+                         +len(canonical_json(schema))+CLASSIFICATION_RUNTIME_MARGIN)
             output_reserve=max(4096,400*len(candidates))
             if input_bound+output_reserve>args.context_budget:
                 raise ValueError(f"entry {row['entry_id']} exceeds complete-request budget: {input_bound}+{output_reserve}")
