@@ -2,7 +2,7 @@
 
 WRUN-1 — Новые команды используют `config.wadoku.rich.luna.toml` (v3). Старый `config.wadoku.xml.luna.toml` оставлен для истории v2. Перед запуском задать `WADOKU_POSTGRES_URL` для базы `wadoku_rich_pilot`. Команды отказываются запускать работников на другой базе. Ниже команды выполняются из корня репозитория с `PYTHONPATH=src:scripts`.
 
-WRUN-2 — Профиль задаёт пути промптов: перевод v13, проверка v9, классификация v9, транскрипции v1. v13 содержит поправки после вычитки run 25 и ещё не испытан на Luna. `--prompt` явно выбирает другую версию. Продолжение перевода по `--run-id` автоматически находит сохранённый промпт по хешу; новая версия по умолчанию не меняет старый прогон. Явно указанный несовместимый промпт вызывает отказ.
+WRUN-2 — The profile selects translation v16, review v9, classification v10, and transcription v1. Translation v16 keeps Japanese authoritative, treats German as secondary evidence, and makes clear that Luna writes only Russian. The paired German dictionary comes directly from the verified XML. `--prompt` selects another version explicitly. A resumed run finds its frozen prompt by hash, so v16 does not change older runs.
 
 ## WRUN-CYCLE — Окно, анализ, продолжение
 
@@ -57,3 +57,15 @@ WRUN-24 — Run 25 перевёл те же 100 статей на v12/rich-v6 с
 WRUN-25 — После полного технического покрытия создать пакет проверки: `.venv/bin/python scripts/wadoku_review_dump.py --run-id RUN_ID --output SCOPE_ROOT/review-packet.json`. Затем создать диагностический Yomitan ZIP и страницу: `.venv/bin/python scripts/wadoku_inspection_site.py --run-id RUN_ID --root SCOPE_ROOT`. Scope в `SCOPE_ROOT/scope.json` должен быть тем же замороженным набором. Генератор отказывается смешивать другой набор или неполный перевод.
 
 WRUN-26 — Проверить `export-report.json`: число исходных статей, покрытие, хеш ZIP и отсутствие пропущенных переводов. Проверить, что страница открывается, поиск работает, а ZIP доступен. Опубликовать страницу как публичный Wadoku demo Site. На странице всегда явно писать модель перевода, состояние ручной вычитки и `не релиз`. Публикация диагностического сайта входит в обычное завершение батча и не требует отдельного ручного одобрения. Она не означает одобрение перевода или готовность выпуска.
+
+## WRUN-20K — Link-closed 20,000-entry run
+
+WRUN-27 — Create one exact 20,000-entry scope with `.venv/bin/python scripts/wadoku_prefix_scope.py --size 20000 --link-closed --output SCOPE_ROOT/scope.json`. The selector keeps the largest source prefix whose full transitive `ref` and `sref` closure fits. It then adds safe source-order fillers with their closures. Every resolvable link target stays inside the scope. The manifest records broken source IDs separately.
+
+WRUN-28 — Run the frozen scope with `.venv/bin/python scripts/wadoku_repeat_run.py --scope-id SCOPE_ID --work-dir SCOPE_ROOT/run --concurrency 80 --articles-per-batch 6 --event-log SCOPE_ROOT/run/pipeline.jsonl`. The command needs no per-window approval. It retries bounded technical failures, stops on unresolved coverage, and writes `progress-report.json` after translation finishes.
+
+WRUN-29 — `progress-report.json` is the stable progress artifact. It records classified and translated article counts, elapsed wall time, attempt error rate, error classes, up to 20 failed-attempt samples, dangling source links, and one deterministic random article from the last completed translation batch. Keep request and response paths in the event logs so later analysis can reproduce typical failures.
+
+WRUN-30 — After exact translation coverage, create `review-packet.json`, then run `scripts/wadoku_inspection_site.py`. The exporter writes paired JP→RU and JP→DE Yomitan ZIP files from the same frozen source and structural decisions. Luna supplies only Russian text. The German ZIP uses the verified German XML directly.
+
+WRUN-31 — For a scope above 5,000 entries, the review page creates one tab per consecutive 5,000-entry scope block. Each tab shows a deterministic random sample of 100 articles by default. The page reports sample issues and whole-export issue counts, and offers both Yomitan ZIP files. Publish this page as the normal public diagnostic site after generation.

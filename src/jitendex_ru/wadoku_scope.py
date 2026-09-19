@@ -198,6 +198,120 @@ def prefix_inventory(source: Path, *, expected_sha256: str, size: int) -> dict[s
     return {'manifest': manifest, 'entries': entries, 'candidates': candidates}
 
 
+def link_closed_prefix_ids(
+    order: list[int], references: dict[int, set[int]], *, size: int,
+) -> tuple[set[int], set[int], int]:
+    """Choose exactly ``size`` entries while closing every resolvable reference.
+
+    The largest possible source prefix is preferred. Remaining capacity is
+    filled in source order, but a filler is accepted only together with its
+    complete transitive reference closure.
+    """
+    if not 1 <= size <= len(order) or len(set(order)) != len(order):
+        raise ValueError('link-closed scope size or source order is invalid')
+    known = set(order)
+
+    def closed(seed: set[int]) -> set[int]:
+        result = set(seed)
+        pending = list(seed)
+        while pending:
+            for target in references.get(pending.pop(), set()):
+                if target in known and target not in result:
+                    result.add(target)
+                    pending.append(target)
+        return result
+
+    low, high = 0, size
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(closed(set(order[:middle]))) <= size:
+            low = middle
+        else:
+            high = middle - 1
+    seed_size = low
+    selected = closed(set(order[:seed_size]))
+    filler_seeds: set[int] = set()
+    while len(selected) < size:
+        for entry_id in order:
+            if entry_id in selected:
+                continue
+            expanded = selected | closed({entry_id})
+            if len(expanded) <= size:
+                selected = expanded
+                filler_seeds.add(entry_id)
+                break
+        else:
+            raise ValueError(f'cannot fill link-closed scope exactly: {len(selected)}/{size}')
+    return selected, filler_seeds, seed_size
+
+
+def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int) -> dict[str, Any]:
+    """Freeze an exact-size prefix-oriented scope with transitive link closure."""
+    if not 1 <= size <= EXPECTED_COUNTS['entries']:
+        raise ValueError('linked scope size is outside the source inventory')
+    if sha256_file(source) != expected_sha256:
+        raise ValueError('source XML hash mismatch')
+    summaries: dict[int, dict[str, Any]] = {}
+    order: list[int] = []
+    references: dict[int, set[int]] = {}
+    raw_references: dict[int, list[dict[str, str]]] = {}
+    for ordinal, value in iter_canonical_entries(source):
+        expression, reading, entry_id = canonical_identity(value)
+        refs = [dict(node['attributes']) | {'tag': node['tag']} for node, _ in tree_paths(value['tree'])
+                if node['tag'] in {'ref', 'sref'} and node['attributes'].get('id')]
+        order.append(entry_id)
+        summaries[entry_id] = {'ordinal': ordinal, 'expression': expression, 'reading': reading}
+        references[entry_id] = {int(ref['id']) for ref in refs}
+        raw_references[entry_id] = refs
+    if len(order) != EXPECTED_COUNTS['entries']:
+        raise ValueError('full XML entry count differs')
+    selected, filler_seeds, seed_size = link_closed_prefix_ids(order, references, size=size)
+    seed_ids = set(order[:seed_size])
+    known = set(order)
+    dangling = sorted({target for entry_id in selected for target in references[entry_id] if target not in known})
+    dependencies = [
+        {'from_id': entry_id, 'target_id': int(ref['id']), 'relation': ref,
+         'state': 'included' if int(ref['id']) in selected else 'missing-from-source'}
+        for entry_id in order if entry_id in selected for ref in raw_references[entry_id]
+    ]
+    external = [row for row in dependencies if row['state'] != 'included']
+    if any(row['target_id'] in known for row in external):
+        raise ValueError('link-closed selection left a resolvable target outside the scope')
+    entries: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    for ordinal, value in iter_canonical_entries(source):
+        entry_id = int(value['entry_id'])
+        if entry_id in selected:
+            if entry_id in seed_ids:
+                categories = ['source-prefix']
+            elif entry_id in filler_seeds:
+                categories = ['closure-filler']
+            else:
+                categories = ['reference-dependency']
+            entries.append({'ordinal': ordinal, 'entry_id': entry_id, 'categories': categories,
+                            'source': value, 'source_sha256': sha256_bytes(canonical_json(value))})
+        candidates.extend(example_candidates([value], selected))
+    targets = {str(target): {'expression': summaries[target]['expression'],
+                             'reading': summaries[target]['reading']}
+               for entry_id in selected for target in references[entry_id] if target in selected}
+    manifest = {
+        'version': 'wadoku-linked-prefix-scope-v1', 'xml_sha256': expected_sha256,
+        'entry_count': len(entries), 'source_entry_count': len(order),
+        'candidate_count': len(candidates),
+        'category_counts': dict(Counter(c for row in entries for c in row['categories'])),
+        'parent_contexts': {}, 'reference_targets': targets, 'dependencies': dependencies,
+        'dangling_source_target_ids': dangling, 'prefix_size': seed_size,
+        'requested_size': size, 'selection_rule': 'largest-prefix-transitive-reference-closure-v1',
+    }
+    manifest['scope_id'] = sha256_bytes(canonical_json(
+        [manifest, [(entry['entry_id'], entry['source_sha256']) for entry in entries]]))
+    if len(entries) != size or len(selected) != size:
+        raise ValueError('link-closed scope did not reach its exact requested size')
+    if sha256_file(source) != expected_sha256:
+        raise ValueError('source changed while inventorying')
+    return {'manifest': manifest, 'entries': entries, 'candidates': candidates}
+
+
 def store_scope(connection: Any, snapshot_id: int, data: dict[str, Any]) -> dict[str, Any]:
     manifest = data['manifest']
     scope_id = manifest['scope_id']

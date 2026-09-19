@@ -147,7 +147,7 @@ def grouped_rows(entries, decisions, labels, *, language='ru'):
     return result
 
 
-def prepare_grouped_rows(entries, decisions, *, labels, reference_targets=None):
+def prepare_grouped_rows(entries, decisions, *, labels, reference_targets=None, language='ru'):
     """Common reference and ownership preparation for preflight and export."""
     entries = list(entries)
     values = {v['entry_id']: (v, t) for v, t in entries}
@@ -163,16 +163,18 @@ def prepare_grouped_rows(entries, decisions, *, labels, reference_targets=None):
         for member in members:
             references[str(member['entry_id'])] = {'expression': expression, 'reading': reading}
     localized = [({**value, 'reference_targets': references}, targets) for value, targets in entries]
-    rendered = grouped_rows(localized, decisions, labels)
+    rendered = grouped_rows(localized, decisions, labels, language=language)
     owners = [(value, targets) for value, targets in localized if value['entry_id'] in rendered]
     return owners, rendered
 
 
-def build_grouped_archive(entries, decisions, output, *, labels, reference_targets=None, **options):
+def build_grouped_archive(entries, decisions, output, *, labels, reference_targets=None,
+                          language='ru', **options):
     """Write the common archive from complete localized ownership groups."""
     entries = list(entries)
-    owners, rendered = prepare_grouped_rows(entries, decisions, labels=labels, reference_targets=reference_targets)
-    report = build_rich_archive(iter(owners), output, language='ru', labels=labels,
+    owners, rendered = prepare_grouped_rows(entries, decisions, labels=labels,
+        reference_targets=reference_targets, language=language)
+    report = build_rich_archive(iter(owners), output, language=language, labels=labels,
         row_factory=lambda value, *_: rendered[value['entry_id']], **options)
     report.update(source_entries=len(entries), lexical_owners=len(owners))
     return report

@@ -100,3 +100,22 @@ def test_real_template_uses_alias_without_inventing_pitch(tmp_path):
         assert [(r[0], r[1]) for r in terms] == [('づくり', 'づくり')]
         assert archive.read('LICENSE') == b'fixture license'
         assert not any(n.startswith('term_meta_bank') for n in archive.namelist())
+
+
+def test_grouped_archive_can_render_german_from_the_same_classified_source(tmp_path):
+    value = canonical_entry(ET.fromstring('''<entry id="1"><form><orth>語</orth>
+        <reading><hira>ご</hira></reading></form><sense><trans><tr>Wort</tr></trans></sense></entry>'''))
+    decision = {'article_policy': 'independent', 'lookup_policy': 'independent_direct',
+                'parent_id': None, 'lookup_needs_review': None, 'lookup_aliases': []}
+    output = tmp_path / 'de.zip'
+    report = assembly.build_grouped_archive([(value, {0: 'слово'})], {1: decision}, output,
+        labels=label_catalog(Path('terminology/wadoku-xml-labels-v2.json')), language='de',
+        license_text=b'fixture', title='Wadoku DE', revision='fixture-de',
+        source_url='https://example.org', source_sha256='fixture', export_audit_id='fixture')
+    assert report['source_entries'] == report['lexical_owners'] == 1
+    import json
+    import zipfile
+    with zipfile.ZipFile(output) as archive:
+        raw = archive.read('term_bank_1.json')
+        assert 'Wort' in raw.decode()
+        assert 'слово' not in raw.decode()

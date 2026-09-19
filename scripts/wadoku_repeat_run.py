@@ -46,9 +46,11 @@ def main():
         if not scope:
             raise ValueError('scope is absent')
         manifest = json.loads(scope[0])
-        prefix5000 = manifest.get('version') == 'wadoku-prefix-scope-v1' and manifest.get('prefix_size') == 5000
-        if count != manifest.get('entry_count') or (count not in {100,200} and not prefix5000):
-            raise ValueError('runner requires a 100/200 pilot or the frozen first-5000 source scope')
+        prefix_scope = manifest.get('version') == 'wadoku-prefix-scope-v1' and manifest.get('prefix_size') == count
+        linked_scope = (manifest.get('version') == 'wadoku-linked-prefix-scope-v1'
+                        and manifest.get('requested_size') == count and 1 <= count <= 20_000)
+        if count != manifest.get('entry_count') or (count not in {100,200} and not prefix_scope and not linked_scope):
+            raise ValueError('runner requires a supported pilot, prefix scope, or link-closed scope')
         event('pipeline_progress', phase='classification', total=count, completed=0, remaining=count,
               elapsed_s=round(time.monotonic()-pipeline_started, 3))
         max_windows = math.ceil(count / 200) * 3
@@ -73,10 +75,17 @@ def main():
         event('classification_coverage', total=count, unresolved=missing)
         if missing:
             raise RuntimeError(f'{missing} entries still need classification; see classification logs')
-        stage('translation', ['scripts/wadoku_translate_window.py', '--scope-id', args.scope_id,
+        translation_log=stage('translation', ['scripts/wadoku_translate_window.py', '--scope-id', args.scope_id,
             '--candidate-scope', '--max-batches', str(count),
             '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '128000',
             '--event-log', str(args.work_dir / 'translation.jsonl')])
+        translation_result=next((json.loads(line) for line in reversed(translation_log.read_text().splitlines())
+                                 if line.startswith('{"run_id"')),None)
+        if not translation_result:
+            raise RuntimeError('translation completed without a parseable run summary')
+        stage('progress-report', ['scripts/wadoku_progress_report.py','--scope-id',args.scope_id,
+            '--run-id',str(translation_result['run_id']),'--log-dir',str(args.work_dir),
+            '--output',str(args.work_dir/'progress-report.json')])
         event('pipeline_finished', scope_id=args.scope_id, classification_unresolved=missing,
               total_articles=count, elapsed_s=round(time.monotonic()-pipeline_started, 3),
               note='Translation completion is not semantic approval; main-thread review follows.')

@@ -7,17 +7,19 @@ from pathlib import Path
 from jitendex_ru.database import Database
 from jitendex_ru.util import atomic_write, canonical_json
 from jitendex_ru.wadoku_profile import load_profile
-from jitendex_ru.wadoku_scope import prefix_inventory, store_scope
+from jitendex_ru.wadoku_scope import linked_prefix_inventory, prefix_inventory, store_scope
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--size', type=int, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--link-closed', action='store_true')
     args = parser.parse_args()
     config = load_profile(Path('config.wadoku.rich.luna.toml'))
     source = Path('work/wadoku-xml/source/wadoku-xml-20260705/wadoku.xml')
-    data = prefix_inventory(source, expected_sha256=config.raw['source']['xml_sha256'], size=args.size)
+    builder = linked_prefix_inventory if args.link_closed else prefix_inventory
+    data = builder(source, expected_sha256=config.raw['source']['xml_sha256'], size=args.size)
     db = Database(config)
     c = db.connect()
     try:

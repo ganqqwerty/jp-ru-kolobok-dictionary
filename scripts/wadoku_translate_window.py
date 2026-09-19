@@ -241,7 +241,10 @@ def main():
                 focused = scope_manifest.get('version') == 'wadoku-focused-scope-v1'
                 prefix_scope = (scope_manifest.get('version') == 'wadoku-prefix-scope-v1'
                                 and scope_manifest.get('prefix_size') == len(scoped))
-                if not prefix_scope and not (focused and len(scoped) == 100) and not 150 <= len(scoped) <= 200:
+                linked_scope = (scope_manifest.get('version') == 'wadoku-linked-prefix-scope-v1'
+                                and scope_manifest.get('requested_size') == len(scoped)
+                                and 1 <= len(scoped) <= 20_000)
+                if not prefix_scope and not linked_scope and not (focused and len(scoped) == 100) and not 150 <= len(scoped) <= 200:
                     raise ValueError('candidate scope size or manifest is unsupported')
                 if candidate_subset:
                     scoped = [r for r in scoped if r['entry_id'] in candidate_subset]
