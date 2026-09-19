@@ -193,6 +193,76 @@ def invalidate_accepted_alignment_failures(
     return {'run_id': run_id, 'invalidated_attempts': repaired}
 
 
+def invalidate_accepted_semantic_failure(
+    connection: Any, run_id: int, attempt_id: str, issues: list[dict[str, Any]], actor: str,
+) -> dict[str, Any]:
+    """Reopen one unreviewed accepted attempt after a source-bound semantic review."""
+    if not actor.strip() or not issues or any(
+        not isinstance(issue, dict) or not str(issue.get('code', '')).startswith('semantic_')
+        or not issue.get('unit_ids') for issue in issues
+    ):
+        raise ValueError('semantic invalidation requires an actor and source-bound semantic issues')
+    connection.execute('SELECT id FROM run WHERE id=? FOR UPDATE', (run_id,)).fetchone()
+    attempt = connection.execute('SELECT * FROM attempt WHERE id=?', (attempt_id,)).fetchone()
+    if not attempt or attempt['outcome'] != 'accepted':
+        raise ValueError('semantic invalidation requires an accepted attempt')
+    batch = connection.execute('SELECT * FROM batch WHERE id=? FOR UPDATE', (attempt['batch_id'],)).fetchone()
+    if (not batch or batch['run_id'] != run_id or batch['kind'] != 'translation'
+            or batch['state'] != 'deterministic_validated'):
+        raise ValueError('semantic invalidation requires the active validated batch')
+    batch_units = {
+        row[0] for row in connection.execute(
+            'SELECT unit_id FROM batch_item WHERE batch_id=?', (batch['id'],),
+        ).fetchall()
+    }
+    issue_units = {unit_id for issue in issues for unit_id in issue['unit_ids']}
+    if not issue_units <= batch_units:
+        raise ValueError('semantic issue cites a unit outside the batch')
+    translations = connection.execute(
+        'SELECT id,accepted FROM translation WHERE attempt_id=? ORDER BY id', (attempt_id,),
+    ).fetchall()
+    if len(translations) != int(batch['unit_count']) or any(row['accepted'] for row in translations):
+        raise ValueError('semantic invalidation found reviewed or incomplete output')
+    marks = ','.join('?' for _ in translations)
+    if connection.execute(
+        f'SELECT 1 FROM review WHERE translation_id IN ({marks}) LIMIT 1',
+        tuple(row['id'] for row in translations),
+    ).fetchone():
+        raise ValueError('semantic invalidation cannot replace reviewed output')
+    connection.execute('DELETE FROM translation WHERE attempt_id=?', (attempt_id,))
+    connection.execute(
+        """UPDATE translation_unit SET status='ready' WHERE id IN
+        (SELECT unit_id FROM batch_item WHERE batch_id=?)""", (batch['id'],),
+    )
+    error_json = canonical_json(issues).decode()
+    connection.execute(
+        "UPDATE attempt SET outcome='rejected',error_json=? WHERE id=?", (error_json, attempt_id),
+    )
+    connection.execute(
+        """UPDATE batch SET state='ready',lease_token=NULL,lease_expires_at=NULL WHERE id=?""",
+        (batch['id'],),
+    )
+    for issue in issues:
+        connection.execute(
+            """INSERT INTO validation_issue
+            (run_id,unit_id,attempt_id,validator,severity,code,details_json)
+            VALUES (?,NULL,?,'orchestrator-semantic-v1','error',?,?)""",
+            (run_id, attempt_id, issue['code'], canonical_json(issue).decode()),
+        )
+    connection.execute(
+        """UPDATE wadoku_window SET state='repair',analysis_json=NULL
+        WHERE run_id=? AND state<>'continue' AND batch_ids_json LIKE ?""",
+        (run_id, f'%"{batch["id"]}"%'),
+    )
+    record = {
+        'attempt_id': attempt_id, 'batch_id': batch['id'], 'actor': actor,
+        'translations_removed': len(translations), 'issues': issues,
+        'response_path': attempt['response_path'],
+    }
+    audit(connection, 'wadoku_semantic_invalidation', 'attempt', attempt_id, record)
+    return record
+
+
 def begin_window(connection: Any, run_id: int, count: int) -> dict[str, Any]:
     if count < 1:
         raise ValueError('window batch count must be positive')
