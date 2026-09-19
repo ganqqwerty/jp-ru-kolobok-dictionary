@@ -1,6 +1,7 @@
 import json
 from wadoku_inspection_site import literal_fallback, render
 from jitendex_ru.wadoku_scope import link_closed_prefix_ids
+from wadoku_progress_report import error_class
 
 
 def test_inspection_fallback_preserves_every_translation_and_examples():
@@ -28,3 +29,8 @@ def test_link_closed_selection_keeps_exact_size_and_every_known_target():
     assert fillers == {6}
     assert prefix_size == 3
     assert all(references[entry] <= selected for entry in selected)
+
+
+def test_progress_report_separates_transport_and_classification_contract_errors():
+    assert error_class(['CLI returncode=-15; usage_available=False']) == 'transport'
+    assert error_class(['incompatible article and lookup decisions']) == 'classification_contract'

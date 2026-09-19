@@ -17,6 +17,9 @@ def error_class(value):
     text=json.dumps(value,ensure_ascii=False).lower()
     if 'transport' in text or 'returncode' in text or 'usage_available=false' in text:
         return 'transport'
+    if ('incompatible article and lookup' in text or 'lookup alias' in text
+            or 'article_policy' in text or 'lookup_policy' in text):
+        return 'classification_contract'
     if 'context' in text or 'reservation' in text or 'token' in text:
         return 'context_or_usage'
     if 'schema' in text or 'json' in text or 'validation' in text:
