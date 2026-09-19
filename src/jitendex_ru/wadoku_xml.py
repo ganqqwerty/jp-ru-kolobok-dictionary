@@ -51,6 +51,7 @@ COUNT_TAGS = {
 }
 BLOCK_ROLES = {
     "tr": "translation",
+    "title": "translation",
     "def": "definition",
     "expl": "explanation",
     "etym": "etymology",
@@ -59,7 +60,7 @@ BLOCK_ROLES = {
 PROTECTED_TAGS = frozenset({
     "orth", "hira", "hatsuon", "romaji", "accent", "jap", "transcr",
     "foreign", "scientif", "specchar", "birthdeath", "date", "ref", "sref",
-    "link", "steinhaus", "wikide", "wikija", "ruigo", "title",
+    "link", "steinhaus", "wikide", "wikija", "ruigo",
 })
 PLACEHOLDER_RE = re.compile(r"⟦WDXP\d{4}⟧")
 TRANSLATABLE_RE = re.compile(r"[A-Za-z\u00c0-\u024f\u1e00-\u1eff]")

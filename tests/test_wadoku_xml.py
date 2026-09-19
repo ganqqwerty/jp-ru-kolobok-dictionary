@@ -60,6 +60,27 @@ def test_nested_selected_block_creates_only_outer_block():
     assert blocks[0]["source_text"] == "außen innen"
 
 
+def test_titles_are_translation_units_not_protected_fragments():
+    nested = canonical_entry(entry(
+        '<entry id="7"><sense><trans><tr><title lang="DEU">Grundlagen der Psychologie</title>'
+        '</tr></trans></sense></entry>'))
+    assert nested['blocks'] == [{
+        'xml_path': '/entry[1]/sense[1]/trans[1]/tr[1]',
+        'role': 'translation',
+        'sense_path': '/entry[1]/sense[1]',
+        'source_text': 'Grundlagen der Psychologie',
+        'prompt_text': 'Grundlagen der Psychologie',
+        'protected_fragments': [],
+        'has_translatable_text': True,
+    }]
+    direct = canonical_entry(entry(
+        '<entry id="8"><sense><trans><title lang="DEU">Tausendundeine Nacht</title>'
+        '</trans></sense></entry>'))
+    assert direct['blocks'][0]['xml_path'] == '/entry[1]/sense[1]/trans[1]/title[1]'
+    assert direct['blocks'][0]['source_text'] == 'Tausendundeine Nacht'
+    assert direct['blocks'][0]['has_translatable_text'] is True
+
+
 def test_wadoku_grammar_maps_to_yomitan_deinflection_rules():
     godan = canonical_entry(entry(f'''<entry xmlns="{NS}" id="9858285"><form>
       <orth>知る</orth><reading><hira>しる</hira></reading></form>
