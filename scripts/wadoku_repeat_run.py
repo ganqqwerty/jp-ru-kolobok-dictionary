@@ -59,7 +59,11 @@ def main():
                         and manifest.get('requested_size') == count and 1 <= count <= 20_000)
         if count != manifest.get('entry_count') or (count not in {100,200} and not prefix_scope and not linked_scope):
             raise ValueError('runner requires a supported pilot, prefix scope, or link-closed scope')
-        event('pipeline_progress', phase='classification', total=count, completed=0, remaining=count,
+        with db.connect() as c:
+            initial_missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',
+                                        (args.scope_id,)).fetchone()[0]
+        event('pipeline_progress', phase='classification', total=count, completed=count-initial_missing,
+              remaining=initial_missing,
               elapsed_s=round(time.monotonic()-pipeline_started, 3))
         max_windows = math.ceil(count / 200) * 3
         for attempt in range(1, max_windows + 1):
