@@ -19,7 +19,7 @@ def main():
     parser.add_argument('--concurrency', type=int, default=100)
     parser.add_argument('--articles-per-batch', type=int, default=6)
     parser.add_argument('--classification-window-size', type=int, default=1000)
-    parser.add_argument('--classification-context-budget', type=int, default=240000)
+    parser.add_argument('--classification-context-budget', type=int, default=250000)
     parser.add_argument('--event-log', type=Path)
     args = parser.parse_args()
     if not 1 <= args.concurrency <= 100:
