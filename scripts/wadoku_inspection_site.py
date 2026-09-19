@@ -152,20 +152,25 @@ def render(node):
     return f'<{tag}{attrs}>'+render(node.get('content',''))+f'</{tag}>'
 
 
-def review_sample(scope, articles, sample_per_batch, batch_size=5000):
-    """Choose a deterministic random sample inside each consecutive scope block."""
+def review_sample(scope, articles, sample_per_batch, batch_size=5000, include_entry_ids=None):
+    """Choose a deterministic random sample and always retain known issue entries."""
     if not 1 <= sample_per_batch <= batch_size:
         raise ValueError('sample size must fit inside one review block')
     entries={entry['entry_id']:entry for entry in scope['entries']}
     if len(entries)!=len(articles) or {a['entry_id'] for a in articles}!=set(entries):
         raise ValueError('review articles differ from the frozen scope')
     ordered=sorted(articles,key=lambda article:entries[article['entry_id']]['ordinal'])
+    include_entry_ids=set(include_entry_ids or ())
     sampled=[];batch_count=(len(ordered)+batch_size-1)//batch_size
     for batch_index in range(batch_count):
         members=ordered[batch_index*batch_size:(batch_index+1)*batch_size]
         if len(ordered)>batch_size and len(members)>sample_per_batch:
+            required=[a for a in members if a['entry_id'] in include_entry_ids]
+            available=[a for a in members if a['entry_id'] not in include_entry_ids]
             rng=random.Random(f"{scope['manifest']['scope_id']}:{batch_index+1}")
-            members=sorted(rng.sample(members,sample_per_batch),key=lambda a:entries[a['entry_id']]['ordinal'])
+            random_count=max(0,sample_per_batch-len(required))
+            members=sorted(required+rng.sample(available,min(random_count,len(available))),
+                           key=lambda a:entries[a['entry_id']]['ordinal'])
         sampled.extend((batch_index+1,article) for article in members)
     return sampled,batch_count
 
@@ -190,7 +195,9 @@ def site(root,scope,packet,report,sample_per_batch=100):
     by_sequence={}
     for row in rows: by_sequence.setdefault(row[6],row)
     entries={e['entry_id']:e for e in scope['entries']};cards=[];ordered=packet['articles']
-    sampled,batch_count=review_sample(scope,ordered,sample_per_batch)
+    sampled,batch_count=review_sample(
+        scope,ordered,sample_per_batch,include_entry_ids={i['entry_id'] for i in issues},
+    )
     for batch_index,article in sampled:
         eid=article['entry_id'];entry=entries[eid];category=entry['categories'][0]
         errors=by_entry.get(eid,[])
@@ -206,7 +213,7 @@ def site(root,scope,packet,report,sample_per_batch=100):
     tabs=''.join(f'<button type="button" class="batch-tab" data-batch="{i}">{(i-1)*5000+1}–{min(i*5000,len(ordered))}</button>' for i in range(1,batch_count+1))
     de_archive=report['archives']['de']['archive_name']
     page=f'''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wadoku — диагностика {len(ordered)} статей</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="review.css"><body><main>
-<header><h1>Wadoku · {len(ordered)} статей</h1><p>Русский перевод: Luna. Немецкий словарь: исходный Wadoku XML. Показана детерминированная случайная выборка до {sample_per_batch} статей из каждого блока 5 000. Полная ручная вычитка не проводилась; это не релиз.</p><a class="download" href="{html.escape(report['archive_name'],quote=True)}">Скачать JP→RU ZIP</a> <a class="download secondary" href="{html.escape(de_archive,quote=True)}">Скачать JP→DE ZIP</a></header>
+<header><h1>Wadoku · {len(ordered)} статей</h1><p>Русский перевод: Luna. Немецкий словарь: исходный Wadoku XML. Показана детерминированная выборка до {sample_per_batch} статей из каждого блока 5 000; найденные проблемные статьи включены обязательно. Полная ручная вычитка не проводилась; это не релиз.</p><a class="download" href="{html.escape(report['archive_name'],quote=True)}">Скачать JP→RU ZIP</a> <a class="download secondary" href="{html.escape(de_archive,quote=True)}">Скачать JP→DE ZIP</a></header>
 <div class="batch-tabs" role="tablist">{tabs}</div>
 <details class="errors"><summary>Проблемы в показанной выборке — {len(sampled_issues)}; во всём экспорте — {len(issues)}</summary>{issues_html}</details>
 <nav><input id="search" aria-label="Найти статью" placeholder="Слово, чтение или ID"><select id="category" aria-label="Категория"><option value="">Все категории</option>{options}</select><label><input type="checkbox" id="errorsOnly"> Только с замечаниями</label><output id="count"></output></nav>

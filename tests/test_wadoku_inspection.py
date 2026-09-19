@@ -52,3 +52,13 @@ def test_review_sample_is_deterministic_and_stays_inside_each_5000_block():
     for batch in range(1,5):
         ids=[article['entry_id'] for current,article in first if current==batch]
         assert len(ids)==100 and min(ids)>(batch-1)*5000 and max(ids)<=batch*5000
+
+
+def test_review_sample_always_includes_known_issue_entries_without_growing_tabs():
+    entries=[{'entry_id':i,'ordinal':i,'categories':['test']} for i in range(1,10_001)]
+    articles=[{'entry_id':i} for i in range(10_000,0,-1)]
+    scope={'manifest':{'scope_id':'fixture'},'entries':entries}
+    sampled,count=review_sample(scope,articles,100,include_entry_ids={1,4999,5001,9999})
+    assert count == 2 and len(sampled) == 200
+    ids={article['entry_id'] for _batch,article in sampled}
+    assert {1,4999,5001,9999} <= ids
