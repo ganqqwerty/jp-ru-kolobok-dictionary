@@ -34,6 +34,7 @@ def test_link_closed_selection_keeps_exact_size_and_every_known_target():
 def test_progress_report_separates_transport_and_classification_contract_errors():
     assert error_class(['CLI returncode=-15; usage_available=False']) == 'transport'
     assert error_class(['incompatible article and lookup decisions']) == 'classification_contract'
+    assert error_class(['full expansion has no exact attested evidence']) == 'classification_contract'
 
 
 def test_review_sample_is_deterministic_and_stays_inside_each_5000_block():

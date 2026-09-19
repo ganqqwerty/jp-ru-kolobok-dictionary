@@ -19,6 +19,7 @@ def error_class(value):
     if 'transport' in text or 'returncode' in text or 'usage_available=false' in text:
         return 'transport'
     if ('incompatible article and lookup' in text or 'lookup alias' in text
+            or 'full expansion' in text or 'attested evidence' in text
             or 'article_policy' in text or 'lookup_policy' in text):
         return 'classification_contract'
     if 'context' in text or 'reservation' in text or 'token' in text:
