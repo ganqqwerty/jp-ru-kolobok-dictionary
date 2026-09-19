@@ -39,6 +39,14 @@ def main():
         if result.returncode:
             raise RuntimeError(f'{name} failed with {result.returncode}; see {log}')
         return log
+    def refresh_progress():
+        command=['scripts/wadoku_progress_report.py','--scope-id',args.scope_id,
+            '--log-dir',str(args.work_dir),'--output',str(args.work_dir/'progress-report.json')]
+        result=subprocess.run([sys.executable,*command],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
+        event('progress_report_refreshed',scope_id=args.scope_id,returncode=result.returncode,
+              output=str(args.work_dir/'progress-report.json'))
+        if result.returncode:
+            raise RuntimeError(f'progress report failed: {result.stderr[-2000:]}')
     try:
         with db.connect() as c:
             scope = c.execute('SELECT manifest_json FROM wadoku_scope WHERE id=?',(args.scope_id,)).fetchone()
@@ -68,6 +76,7 @@ def main():
                 missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',(args.scope_id,)).fetchone()[0]
             event('pipeline_progress', phase='classification', total=count, completed=count-missing, remaining=missing,
                   window=attempt, window_summary=summary, elapsed_s=round(time.monotonic()-pipeline_started, 3))
+            refresh_progress()
             if summary and summary['tasks'] == 0:
                 break
         with db.connect() as c:
