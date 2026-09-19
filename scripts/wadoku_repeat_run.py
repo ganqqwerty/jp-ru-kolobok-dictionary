@@ -18,10 +18,13 @@ def main():
     parser.add_argument('--work-dir', type=Path, required=True)
     parser.add_argument('--concurrency', type=int, default=100)
     parser.add_argument('--articles-per-batch', type=int, default=6)
+    parser.add_argument('--classification-window-size', type=int, default=1000)
     parser.add_argument('--event-log', type=Path)
     args = parser.parse_args()
     if not 1 <= args.concurrency <= 100:
         raise ValueError('concurrency is 1–100')
+    if not 1 <= args.classification_window_size <= 5000:
+        raise ValueError('classification window size is 1–5000')
     config = load_profile(Path('config.wadoku.rich.luna.toml'))
     from psycopg.conninfo import conninfo_to_dict
     if conninfo_to_dict(config.database_url()).get('dbname') != 'wadoku_rich_pilot':
@@ -65,14 +68,14 @@ def main():
         event('pipeline_progress', phase='classification', total=count, completed=count-initial_missing,
               remaining=initial_missing,
               elapsed_s=round(time.monotonic()-pipeline_started, 3))
-        max_windows = math.ceil(count / 200) * 3
+        max_windows = math.ceil(count / args.classification_window_size) * 3
         for attempt in range(1, max_windows + 1):
             with db.connect() as c:
                 missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',(args.scope_id,)).fetchone()[0]
             if not missing:
                 break
             log = stage(f'classification-window{attempt:03d}', ['scripts/wadoku_classify_window.py', '--scope-id', args.scope_id,
-                '--limit', str(min(200, missing)), '--concurrency', str(args.concurrency), '--context-budget', '128000',
+                '--limit', str(min(args.classification_window_size, missing)), '--concurrency', str(args.concurrency), '--context-budget', '128000',
                 '--work-dir', str(args.work_dir / 'classification'), '--event-log', str(args.work_dir / 'classification.jsonl')])
             summary = next((json.loads(line)['classification_window'] for line in reversed(log.read_text().splitlines())
                             if line.startswith('{"classification_window"')), None)
