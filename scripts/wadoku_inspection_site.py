@@ -126,14 +126,14 @@ def export(run_id, root, scope, packet):
             description_note=f'Diagnostic dictionary with {source_count} frozen source records. Not a release.')
         reports[language].update(validate_archive(output,Path('schemas/yomitan-77e200428902abf4fa48284df92da7af3dcb4162')))
         reports[language].update(archive_name=archive_names[language],sha256=sha256_file(output))
-    report=reports['ru']
+    report=copy.deepcopy(reports['ru'])
     prefix_sequences = {(g['expression'],g['reading'],s):g['sequence']
                         for g in report['prefix_lookup_groups'] for s in g['source_sequences']}
     for eid, item in coverage.items():
         item['sequences'] = sorted({prefix_sequences.get((r[0],r[1],r[6]),r[6])
                                     for r in rendered['ru'][int(eid)][0]})
     report.update(run_id=run_id,source_entries=source_count,archive_name=archive_names['ru'],
-                  archives=reports,release_approved=False,issues=issues,coverage=coverage)
+                  archives=copy.deepcopy(reports),release_approved=False,issues=issues,coverage=coverage)
     atomic_write(root/'export-report.json',canonical_json(report));return report
 
 
