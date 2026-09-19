@@ -21,6 +21,7 @@ def error_class(value):
     if ('incompatible article and lookup' in text or 'lookup alias' in text
             or 'full expansion' in text or 'attested evidence' in text
             or 'parent not present' in text
+            or 'template has neither' in text
             or 'article_policy' in text or 'lookup_policy' in text):
         return 'classification_contract'
     if 'context' in text or 'reservation' in text or 'token' in text:
