@@ -152,6 +152,24 @@ def render(node):
     return f'<{tag}{attrs}>'+render(node.get('content',''))+f'</{tag}>'
 
 
+def review_sample(scope, articles, sample_per_batch, batch_size=5000):
+    """Choose a deterministic random sample inside each consecutive scope block."""
+    if not 1 <= sample_per_batch <= batch_size:
+        raise ValueError('sample size must fit inside one review block')
+    entries={entry['entry_id']:entry for entry in scope['entries']}
+    if len(entries)!=len(articles) or {a['entry_id'] for a in articles}!=set(entries):
+        raise ValueError('review articles differ from the frozen scope')
+    ordered=sorted(articles,key=lambda article:entries[article['entry_id']]['ordinal'])
+    sampled=[];batch_count=(len(ordered)+batch_size-1)//batch_size
+    for batch_index in range(batch_count):
+        members=ordered[batch_index*batch_size:(batch_index+1)*batch_size]
+        if len(ordered)>batch_size and len(members)>sample_per_batch:
+            rng=random.Random(f"{scope['manifest']['scope_id']}:{batch_index+1}")
+            members=sorted(rng.sample(members,sample_per_batch),key=lambda a:entries[a['entry_id']]['ordinal'])
+        sampled.extend((batch_index+1,article) for article in members)
+    return sampled,batch_count
+
+
 def site(root,scope,packet,report,sample_per_batch=100):
     from wadoku_select200 import CATEGORIES
     category_labels={**CATEGORIES,'source-prefix':'Первые записи источника',
@@ -171,14 +189,8 @@ def site(root,scope,packet,report,sample_per_batch=100):
         css=z.read('styles.css')
     by_sequence={}
     for row in rows: by_sequence.setdefault(row[6],row)
-    entries={e['entry_id']:e for e in scope['entries']}; cards=[]
-    ordered=packet['articles']; sampled=[]; batch_count=(len(ordered)+4999)//5000
-    for batch_index in range(batch_count):
-        members=ordered[batch_index*5000:(batch_index+1)*5000]
-        if len(ordered)>5000 and len(members)>sample_per_batch:
-            rng=random.Random(f"{scope['manifest']['scope_id']}:{batch_index+1}")
-            members=sorted(rng.sample(members,sample_per_batch),key=lambda a:entries[a['entry_id']]['ordinal'])
-        sampled.extend((batch_index+1,article) for article in members)
+    entries={e['entry_id']:e for e in scope['entries']};cards=[];ordered=packet['articles']
+    sampled,batch_count=review_sample(scope,ordered,sample_per_batch)
     for batch_index,article in sampled:
         eid=article['entry_id'];entry=entries[eid];category=entry['categories'][0]
         errors=by_entry.get(eid,[])
