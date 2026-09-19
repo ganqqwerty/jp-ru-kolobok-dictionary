@@ -39,9 +39,35 @@ def summarize(directory):
     commands.sort(key=lambda c:c['started_utc'] or '')
     failed = [a for a in attempts.values() if a.get('status')=='rejected' or a.get('returncode') not in (None,0)]
     unfinished = [a['attempt_id'] for a in attempts.values() if a.get('status') not in {'accepted','rejected'}]
+    stage_attempts = Counter(a.get('stage','unknown') for a in attempts.values())
+    stage_failures = Counter(a.get('stage','unknown') for a in failed)
+    stage_terminal = Counter(a.get('stage','unknown') for a in attempts.values()
+                             if a.get('status') in {'accepted','rejected'})
+    usage_fields=('input_tokens','cached_input_tokens','cache_write_input_tokens',
+                  'output_tokens','reasoning_output_tokens')
+    stage_tokens={}
+    missing_usage=Counter()
+    for attempt in attempts.values():
+        if attempt.get('status') not in {'accepted','rejected'}:
+            continue
+        stage=attempt.get('stage','unknown');usage=attempt.get('usage')
+        if not isinstance(usage,dict):
+            missing_usage[stage]+=1;continue
+        totals=stage_tokens.setdefault(stage,{field:0 for field in usage_fields})
+        for field in usage_fields:
+            value=usage.get(field)
+            if isinstance(value,int): totals[field]+=value
+    stage_error_rates={stage:(stage_failures[stage]/total if total else 0)
+                       for stage,total in stage_terminal.items()}
     first = min((c['started_utc'] for c in commands if c['started_utc']),default=None)
     last = max((c['finished_utc'] for c in commands if c['finished_utc']),default=None)
     return {'commands':commands, 'attempt_count':len(attempts), 'failed_attempts':failed, 'unfinished_attempts':unfinished,
+        'stage_attempt_counts':dict(sorted(stage_attempts.items())),
+        'stage_terminal_counts':dict(sorted(stage_terminal.items())),
+        'stage_failed_attempt_counts':dict(sorted(stage_failures.items())),
+        'stage_error_rates':dict(sorted(stage_error_rates.items())),
+        'stage_token_totals':dict(sorted(stage_tokens.items())),
+        'stage_terminal_missing_usage':dict(sorted(missing_usage.items())),
         'wall_including_inter_iteration_review_s':round((datetime.fromisoformat(last)-datetime.fromisoformat(first)).total_seconds(),3) if first and last else None,
         'note':'Do not sum nested pipeline and child stage durations. Wall time across iterations includes manual review and prompt edits.'}
 

@@ -33,6 +33,18 @@ def error_class(value):
     return 'other'
 
 
+def attempt_summary(rows):
+    """Summarize authoritative terminal attempt rows grouped by outcome."""
+    outcomes={str(row['outcome']):int(row['attempts']) for row in rows}
+    accepted=outcomes.get('accepted',0);rejected=outcomes.get('rejected',0)
+    terminal=accepted+rejected
+    token_fields=('input_tokens','cached_input_tokens','output_tokens','total_tokens')
+    tokens={field:sum(int(row[field] or 0) for row in rows) for field in token_fields}
+    return {'accepted':accepted,'rejected':rejected,'terminal':terminal,
+            'error_rate':rejected/terminal if terminal else 0,'tokens':tokens,
+            'terminal_missing_usage':sum(int(row['missing_usage'] or 0) for row in rows)}
+
+
 def build(scope_id, log_dir, run_id=None):
     timeline=summarize(log_dir)
     config=load_profile(Path('config.wadoku.rich.luna.toml'))
@@ -47,6 +59,7 @@ def build(scope_id, log_dir, run_id=None):
                 candidates=c.execute("SELECT id,limits_json FROM run WHERE pipeline_version='wadoku-xml-v3' ORDER BY id DESC").fetchall()
                 run_id=next((int(row['id']) for row in candidates if json.loads(row['limits_json']).get('scope_id')==scope_id),None)
             translated=units=translated_units=0; last_batch=None; random_article=None
+            database_attempts={}
             if run_id is not None:
                 translated=c.execute('''SELECT count(*) FROM run_article ra WHERE ra.run_id=? AND NOT EXISTS (
                     SELECT 1 FROM translation_unit u WHERE u.run_id=ra.run_id AND u.article_id=ra.article_id
@@ -60,7 +73,7 @@ def build(scope_id, log_dir, run_id=None):
                 if last_batch:
                     request=json.loads(Path(last_batch['manifest_path']).read_text())
                     article=random.Random(last_batch['id']).choice(request['articles'])
-                    row=c.execute('SELECT id FROM article WHERE sequence=? AND id IN (SELECT article_id FROM run_article WHERE run_id=?)',
+                    row=c.execute('SELECT id,expression,reading FROM article WHERE sequence=? AND id IN (SELECT article_id FROM run_article WHERE run_id=?)',
                                   (article['sequence'],run_id)).fetchone()
                     targets=[]
                     if row:
@@ -70,8 +83,26 @@ def build(scope_id, log_dir, run_id=None):
                             WHERE u.run_id=? AND u.article_id=? ORDER BY u.json_pointer''',(run_id,row[0])).fetchall()]
                     random_article={'batch_id':last_batch['id'],'finished_at':str(last_batch['completed_at']),
                         'stage':'translation',
-                        'entry_id':article['sequence'],'expression':article['expression'],'reading':article['reading'],
+                        'entry_id':article['sequence'],
+                        'expression':row['expression'] if row else article.get('expression') or article.get('term'),
+                        'reading':row['reading'] if row else article.get('reading'),
                         'translations':targets[:8]}
+                attempt_query='''SELECT a.outcome,count(*) AS attempts,
+                    coalesce(sum(a.input_tokens),0) AS input_tokens,
+                    coalesce(sum(a.cached_input_tokens),0) AS cached_input_tokens,
+                    coalesce(sum(a.output_tokens),0) AS output_tokens,
+                    coalesce(sum(a.total_tokens),0) AS total_tokens,
+                    sum(CASE WHEN a.total_tokens IS NULL THEN 1 ELSE 0 END) AS missing_usage
+                    FROM attempt a JOIN batch b ON b.id=a.batch_id {join}
+                    WHERE {predicate} AND b.kind=? AND a.outcome IN ('accepted','rejected')
+                    GROUP BY a.outcome ORDER BY a.outcome'''
+                classification_rows=c.execute(attempt_query.format(
+                    join='JOIN run r ON r.id=b.run_id',predicate='r.selection_sha256=?'),
+                    (scope_id,'classification')).fetchall()
+                translation_rows=c.execute(attempt_query.format(
+                    join='',predicate='b.run_id=?'),(run_id,'translation')).fetchall()
+                database_attempts={'classification':attempt_summary(classification_rows),
+                                   'translation':attempt_summary(translation_rows)}
             if random_article is None:
                 classified_batch=c.execute('''SELECT b.id,b.manifest_path,a.completed_at FROM batch b
                     JOIN attempt a ON a.batch_id=b.id JOIN run r ON r.id=b.run_id
@@ -96,13 +127,15 @@ def build(scope_id, log_dir, run_id=None):
     finally:
         db.close()
     failed=timeline['failed_attempts']; classes=Counter(error_class(item.get('errors') or item) for item in failed)
-    attempts=timeline['attempt_count']
+    attempts=sum(item['terminal'] for item in database_attempts.values())
+    rejected=sum(item['rejected'] for item in database_attempts.values())
     return {'schema_version':2,'generated_utc':datetime.now(timezone.utc).isoformat(),
         'scope_id':scope_id,'run_id':run_id,'scope_entries':total,'classified_articles':classified,
         'translated_articles':translated,'translation_units':units,'translated_units':translated_units,
         'elapsed_wall_s':timeline['wall_including_inter_iteration_review_s'],
-        'attempt_count':attempts,'failed_attempt_count':len(failed),
-        'attempt_error_rate':(len(failed)/attempts if attempts else 0),
+        'attempt_count':attempts,'failed_attempt_count':rejected,
+        'attempt_error_rate':(rejected/attempts if attempts else 0),
+        'database_attempts':database_attempts,
         'error_class_counts':dict(sorted(classes.items())),'failed_attempt_samples':failed[:20],
         'random_article_from_last_finished_batch':random_article,
         'dangling_source_target_ids':manifest.get('dangling_source_target_ids',[]),

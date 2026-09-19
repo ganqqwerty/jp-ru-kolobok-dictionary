@@ -288,6 +288,10 @@ WXR-YOM-13 — Use one shared mapping from canonical XML structure to Yomitan st
 
 WXR-YOM-14 — The German renderer must reproduce the original German block text deterministically. The Russian renderer must replace only the corresponding learner-facing block values.
 
+WXR-YOM-15 — Export JP→DE and JP→RU from the same frozen scope, canonical XML objects, grouping decisions, lookup aliases, reference map, pronunciation data, and sequence ownership. Do not create a second German translation run. Validate both ZIP files against the same Yomitan schema before publishing them together.
+
+WXR-YOM-16 — After export, scan every internal `?query=` link in every term bank of both ZIP files. Every query must match at least one lookup key in the same ZIP. If a referenced in-scope article falls back to diagnostic rendering, still apply every source-bound classified alias. Keep unresolved sibling forms visible, but do not let a literal template key break an approved reference link.
+
 ## WXR-VAL — Validation gates
 
 WXR-VAL-1 — Validate the XML against its XSD. After import, require matching counts for entries, forms, readings, senses, and learner-facing semantic blocks. This catches source loss.
@@ -473,6 +477,10 @@ WXR-REPORT-11 — If the user asks for status, answer from a new PostgreSQL snap
 WXR-REPORT-12 — The final user report states the run ID, total elapsed time, lookup-template and accepted-alias counts, lookup-expansion attempts and tokens, exact translation reuse count and percentage, Russian Luna request outcomes and failure percentages, Russian token totals, accepted article and unit counts, final ZIP paths and hashes, article-log paths and hashes, PostgreSQL dump hash, smoke result, and any remaining limitation. Say `complete` only after every WXR-VAL gate passes.
 
 WXR-REPORT-13 — Use these commands for a long step. `start` creates the step timer, each `snapshot` reads and stores current metrics, and `finish` records the verified end state. The orchestrator converts the returned JSON to the WXR-REPORT-9 table.
+
+WXR-REPORT-15 — Treat each next block of 5,000 frozen source entries as one review milestone. After a milestone, update one public review site. Give each completed block its own tab and show a deterministic random sample of 100 entries. Always replace random entries with known issue entries from that block so the tab stays at 100 entries when possible. Publish the complete JP→RU and JP→DE ZIP files on the same site. This update is automatic and does not wait for manual approval.
+
+WXR-REPORT-16 — Save one machine-readable progress report after the run. It records database article and unit counts, elapsed wall time, attempts and error rate per stage, token totals per stage, terminal attempts with missing usage, one deterministic random article from the last accepted batch, and samples of failed attempts. Keep semantic review findings, corrected alignment incidents, source-data faults, and unresolved output limits in the site issue list and run logs.
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/wadoku_xml_dictionary.py progress \

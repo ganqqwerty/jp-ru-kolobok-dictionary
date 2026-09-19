@@ -105,6 +105,11 @@ def grouped_rows(entries, decisions, labels, *, language='ru'):
             issues.append({'entry_id': entry_id, 'code': 'render_error', 'reason': str(error)})
     if issues:
         raise AssemblyError(issues)
+    return merge_grouped_rows(rendered, groups)
+
+
+def merge_grouped_rows(rendered, groups):
+    """Merge already rendered rows into explicit lexical ownership groups."""
     result = {}
     for owner, members in groups.items():
         rows, metadata = copy.deepcopy(rendered[owner])

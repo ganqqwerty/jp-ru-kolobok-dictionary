@@ -1,7 +1,8 @@
 import json
-from wadoku_inspection_site import literal_fallback, render, review_sample
+from wadoku_inspection_site import diagnostic_lookup_rows, literal_fallback, render, review_sample
 from jitendex_ru.wadoku_scope import link_closed_prefix_ids
-from wadoku_progress_report import error_class
+from wadoku_progress_report import attempt_summary, error_class
+from wadoku_run_report import summarize
 
 
 def test_inspection_fallback_preserves_every_translation_and_examples():
@@ -13,6 +14,15 @@ def test_inspection_fallback_preserves_every_translation_and_examples():
     data=json.dumps(literal_fallback(article),ensure_ascii=False)
     assert all(text in data for text in ['значение','перевод примера','пояснение','例'])
     assert 'example-sentence-a' in data and 'example-sentence-b' in data
+
+
+def test_diagnostic_lookup_keeps_unresolved_forms_but_applies_safe_aliases():
+    rows=[['雌…','め…','','',0,['first'],1,''],['牝…','め…','','',0,['second'],1,'']]
+    metadata=[['雌…','freq',1],['牝…','freq',2]]
+    decision={'lookup_aliases':[{'source_form':'雌…','expression':'雌','reading':'め','kind':'prefix_only'}]}
+    mapped,mapped_metadata=diagnostic_lookup_rows(rows,metadata,decision)
+    assert [(r[0],r[1]) for r in mapped] == [('雌','め'),('牝…','め…')]
+    assert mapped_metadata == [['牝…','freq',2]]
 
 
 def test_preview_escapes_source_content_and_unsafe_links():
@@ -40,6 +50,42 @@ def test_progress_report_separates_transport_and_classification_contract_errors(
     assert error_class(['selected example is not eligible']) == 'classification_contract'
     assert error_class(['duplicate selected example ID']) == 'classification_contract'
     assert error_class(['unexpanded example template selected']) == 'classification_contract'
+
+
+def test_progress_report_uses_authoritative_terminal_attempt_counts():
+    rows=[{'outcome':'accepted','attempts':7,'input_tokens':100,'cached_input_tokens':20,
+           'output_tokens':30,'total_tokens':130,'missing_usage':0},
+          {'outcome':'rejected','attempts':3,'input_tokens':40,'cached_input_tokens':0,
+           'output_tokens':5,'total_tokens':45,'missing_usage':1}]
+    result=attempt_summary(rows)
+    assert result['accepted']==7 and result['rejected']==3 and result['terminal']==10
+    assert result['error_rate']==0.3
+    assert result['tokens']=={'input_tokens':140,'cached_input_tokens':20,
+                              'output_tokens':35,'total_tokens':175}
+    assert result['terminal_missing_usage']==1
+
+
+def test_run_report_separates_stage_error_rates_and_tokens(tmp_path):
+    rows=[
+        {'invocation_id':'one','stage':'classification','event':'command_started','elapsed_s':0,
+         'utc':'2026-01-01T00:00:00+00:00','active_workers':0},
+        {'invocation_id':'one','stage':'classification','event':'attempt_finished','elapsed_s':1,
+         'utc':'2026-01-01T00:00:01+00:00','active_workers':1,'attempt_id':'a1',
+         'batch_id':'b1','status':'accepted','returncode':0,
+         'usage':{'input_tokens':10,'cached_input_tokens':2,'output_tokens':3}},
+        {'invocation_id':'one','stage':'classification','event':'attempt_finished','elapsed_s':2,
+         'utc':'2026-01-01T00:00:02+00:00','active_workers':1,'attempt_id':'a2',
+         'batch_id':'b2','status':'rejected','returncode':1,'errors':['transport']},
+        {'invocation_id':'one','stage':'classification','event':'command_finished','elapsed_s':3,
+         'utc':'2026-01-01T00:00:03+00:00','active_workers':0,'status':'complete'},
+    ]
+    (tmp_path/'classification.jsonl').write_text('\n'.join(map(json.dumps,rows)))
+    result=summarize(tmp_path)
+    assert result['stage_terminal_counts']=={'classification':2}
+    assert result['stage_failed_attempt_counts']=={'classification':1}
+    assert result['stage_error_rates']=={'classification':0.5}
+    assert result['stage_token_totals']['classification']['input_tokens']==10
+    assert result['stage_terminal_missing_usage']=={'classification':1}
 
 
 def test_review_sample_is_deterministic_and_stays_inside_each_5000_block():

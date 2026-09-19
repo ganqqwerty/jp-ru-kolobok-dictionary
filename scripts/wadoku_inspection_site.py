@@ -14,8 +14,8 @@ import zipfile
 
 from jitendex_ru.database import Database
 from jitendex_ru.wadoku_profile import load_profile
-from jitendex_ru.wadoku_pipeline import localized_run
-from jitendex_ru.wadoku_assembly import lookup_rows
+from jitendex_ru.wadoku_pipeline import localized_run, ownership_groups
+from jitendex_ru.wadoku_assembly import lookup_rows, merge_grouped_rows
 from jitendex_ru.wadoku_xml import canonical_identity, yomitan_rows, build_rich_archive, label_catalog, reference_target_index
 from jitendex_ru.wadoku_transcriptions import apply_stored_resolutions
 from jitendex_ru.wadoku_quality import TEMPLATE_RE
@@ -46,6 +46,21 @@ def literal_fallback(article, language='ru'):
         {'tag':'ol','content':[{'tag':'li','content':v} for v in senses.values()]}]}}]
 
 
+def diagnostic_lookup_rows(rows, metadata, decision):
+    """Apply every valid classified alias without hiding unresolved sibling forms."""
+    result=[];mapped_terms=set()
+    for row in rows:
+        if not TEMPLATE_RE.search(row[0]+row[1]):
+            result.append(row);continue
+        try:
+            mapped,_=lookup_rows([row],[],decision)
+        except ValueError:
+            result.append(row)
+        else:
+            result.extend(mapped);mapped_terms.add(row[0])
+    return result,[item for item in metadata if item[0] not in mapped_terms]
+
+
 def export(run_id, root, scope, packet):
     config=load_profile(Path('config.wadoku.rich.luna.toml'))
     from psycopg.conninfo import conninfo_to_dict
@@ -68,28 +83,37 @@ def export(run_id, root, scope, packet):
     if sha256_file(xml)!=config.raw['source']['xml_sha256']: raise ValueError('source hash differs')
     refs=reference_target_index(xml)
     labels=label_catalog(Path('terminology/wadoku-xml-labels-v2.json'))
+    values={value['entry_id']:(value,targets) for value,targets in entries}
+    assembly_decisions=copy.deepcopy(decisions)
+    for entry_id,decision in assembly_decisions.items():
+        if decision.get('article_policy')=='needs_review':
+            decision.update(article_policy='independent',lookup_policy='independent_direct',parent_id=None)
+    groups=ownership_groups(list(values),assembly_decisions)
+    owner_by_entry={member['entry_id']:owner for owner,members in groups.items() for member in members}
+    group_refs=copy.deepcopy(refs)
+    for owner,members in groups.items():
+        expression,reading,_=canonical_identity(values[owner][0])
+        if TEMPLATE_RE.search(expression+reading):
+            aliases=assembly_decisions[owner].get('lookup_aliases',[])
+            if aliases: expression,reading=aliases[0]['expression'],aliases[0]['reading']
+        for member in members:
+            group_refs[str(member['entry_id'])]={'expression':expression,'reading':reading}
     issues=[]; rendered={'ru':{},'de':{}};coverage={}
     for value,targets in entries:
         eid=value['entry_id']; decision=decisions[eid]; warnings=[]
-        if decision.get('article_policy')!='independent':
-            parent=decision.get('parent_id')
-            if parent in expected:
-                warnings.append(f'Запись классифицирована как подстатья #{parent}; в диагностическом экспорте временно показана отдельно.')
-            else:
-                warnings.append(f'Запись классифицирована как подстатья #{parent}, но родитель не входит в выборку; здесь она временно показана отдельно.')
+        if decision.get('article_policy')=='needs_review':
+            warnings.append('Лексическое владение не разрешено: '+decision['reason'])
         if decision.get('lookup_needs_review'):
             warnings.append('Шаблон/поиск не разрешён: '+decision['lookup_needs_review'])
         try:
-            rows,meta=yomitan_rows({**value,'reference_targets':refs},'ru',labels,targets)
-            try:
-                if not decision.get('lookup_needs_review'): rows,meta=lookup_rows(rows,meta,decision)
-            except ValueError as error:
-                warnings.append(str(error))
+            rows,meta=yomitan_rows({**value,'reference_targets':group_refs},'ru',labels,targets)
+            rows,meta=diagnostic_lookup_rows(rows,meta,decision)
             if any(TEMPLATE_RE.search(r[0]+r[1]) for r in rows):
                 warnings.append('Сохранён буквальный шаблон: естественный поиск не гарантирован; заполнение слотов не придумано.')
         except ValueError as error:
             expression,reading,_=canonical_identity(value)
             rows=[[expression,reading,'','',0,literal_fallback(articles[eid]),eid,'']];meta=[]
+            rows,meta=diagnostic_lookup_rows(rows,meta,decision)
             warnings.append('Упрощённый диагностический вид; исходные переводы сохранены. '+str(error))
         if warnings:
             warning={'type':'structured-content','content':{'tag':'div','style':{'color':'#cf5572'},
@@ -99,13 +123,37 @@ def export(run_id, root, scope, packet):
             issues.append({'id':f'STR-{eid}','entry_id':eid,'category':'structure','severity':'warning','message':' '.join(warnings)})
         rendered['ru'][eid]=(rows,meta)
         try:
-            de_rows,de_meta=yomitan_rows({**value,'reference_targets':refs},'de',labels,targets)
-            if not decision.get('lookup_needs_review'):
-                de_rows,de_meta=lookup_rows(de_rows,de_meta,decision)
+            de_rows,de_meta=yomitan_rows({**value,'reference_targets':group_refs},'de',labels,targets)
+            de_rows,de_meta=diagnostic_lookup_rows(de_rows,de_meta,decision)
         except ValueError:
             expression,reading,_=canonical_identity(value)
             de_rows=[[expression,reading,'','',0,literal_fallback(articles[eid],'de'),eid,'']];de_meta=[]
+            de_rows,de_meta=diagnostic_lookup_rows(de_rows,de_meta,decision)
         rendered['de'][eid]=(de_rows,de_meta)
+    merged={'ru':{},'de':{}}
+    for owner,members in groups.items():
+        try:
+            parts={language:merge_grouped_rows(rows,{owner:members})
+                   for language,rows in rendered.items()}
+        except ValueError as error:
+            message='Группа временно оставлена отдельными статьями: '+str(error)
+            issues.append({'id':f'GROUP-{owner}','entry_id':owner,'category':'structure',
+                           'severity':'warning','message':message})
+            for member in members:
+                entry_id=member['entry_id'];owner_by_entry[entry_id]=entry_id
+                for language in ('ru','de'):
+                    rows,metadata=copy.deepcopy(rendered[language][entry_id])
+                    warning={'type':'structured-content','content':{'tag':'div',
+                        'style':{'color':'#cf5572'},'content':'Диагностика: '+message}}
+                    for row in rows: row[5]=[warning,*row[5]]
+                    merged[language][entry_id]=(rows,metadata)
+        else:
+            for language in ('ru','de'): merged[language].update(parts[language])
+    rendered=merged
+    if set(rendered['ru'])!=set(rendered['de']): raise ValueError('paired lexical owners differ')
+    owners=[values[entry_id] for entry_id in values if entry_id in rendered['ru']]
+    for eid in expected:
+        rows=rendered['ru'][owner_by_entry[eid]][0]
         coverage[str(eid)]={'sequences':sorted({r[6] for r in rows}),'keys':[[r[0],r[1]] for r in rows]}
     stem='wadoku-stress200' if source_count==200 else f'wadoku-linked{source_count}-run{run_id}'
     archive_names={'ru':f'{stem}-ru.zip','de':f'{stem}-de.zip'}
@@ -116,7 +164,7 @@ def export(run_id, root, scope, packet):
     reports={}
     for language in ('ru','de'):
         output=root/'site/dist'/archive_names[language]
-        reports[language]=build_rich_archive(iter(entries),output,language=language,labels=labels,
+        reports[language]=build_rich_archive(iter(owners),output,language=language,labels=labels,
             license_text=license_path.read_bytes(),
             title=(f'Wadoku RU · диагностика {source_count} · {run_id}' if language=='ru'
                    else f'Wadoku DE · diagnostic {source_count} · {run_id}'),
@@ -131,8 +179,8 @@ def export(run_id, root, scope, packet):
                         for g in report['prefix_lookup_groups'] for s in g['source_sequences']}
     for eid, item in coverage.items():
         item['sequences'] = sorted({prefix_sequences.get((r[0],r[1],r[6]),r[6])
-                                    for r in rendered['ru'][int(eid)][0]})
-    report.update(run_id=run_id,source_entries=source_count,archive_name=archive_names['ru'],
+                                    for r in rendered['ru'][owner_by_entry[int(eid)]][0]})
+    report.update(run_id=run_id,source_entries=source_count,lexical_owners=len(owners),archive_name=archive_names['ru'],
                   archives=copy.deepcopy(reports),release_approved=False,issues=issues,coverage=coverage)
     atomic_write(root/'export-report.json',canonical_json(report));return report
 
