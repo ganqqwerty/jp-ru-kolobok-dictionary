@@ -22,6 +22,11 @@ from jitendex_ru.wadoku_telemetry import event, logged_dispatch, run_logged
 CLASSIFICATION_RUNTIME_MARGIN = 16_384
 
 
+def output_reserve(example_count: int) -> int:
+    """Reserve measured structured output while keeping complete source input."""
+    return max(4096, 2048 + 140 * example_count)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=Path, default=DEFAULT_PROFILE)
@@ -122,10 +127,10 @@ def main():
             # for CLI/runtime instructions and compare it with reported usage.
             input_bound=(len(prompt.encode())+len(canonical_json(request))
                          +len(canonical_json(schema))+CLASSIFICATION_RUNTIME_MARGIN)
-            output_reserve=max(4096,400*len(candidates))
-            if input_bound+output_reserve>args.context_budget:
-                raise ValueError(f"entry {row['entry_id']} exceeds complete-request budget: {input_bound}+{output_reserve}")
-            requests.append((request,schema,input_bound,output_reserve))
+            reserved_output=output_reserve(len(candidates))
+            if input_bound+reserved_output>args.context_budget:
+                raise ValueError(f"entry {row['entry_id']} exceeds complete-request budget: {input_bound}+{reserved_output}")
+            requests.append((request,schema,input_bound,reserved_output))
             if len(requests) >= args.limit:
                 break
         if args.dry_run:
@@ -147,7 +152,7 @@ def main():
         window_started=time.monotonic()
         completed=accepted_count=0
         event('stage_prepared', run_id=run_id, scope_id=args.scope_id, tasks=len(requests), concurrency=args.concurrency)
-        for request,schema,input_bound,output_reserve in requests:
+        for request,schema,input_bound,reserved_output in requests:
             path=args.work_dir/'inbox'/f"{request['batch_id']}.json"
             if path.exists() and path.read_bytes()!=canonical_json(request):
                 raise ValueError('frozen request differs')
@@ -167,7 +172,7 @@ def main():
                 connection.commit()
             runtime_prompt = retry_prompt(connection, request['batch_id'], prompt)
             input_bound += len(runtime_prompt.encode()) - len(prompt.encode())
-            if input_bound + output_reserve > args.context_budget:
+            if input_bound + reserved_output > args.context_budget:
                 raise ValueError('classification retry exceeds context reservation')
             item=claim(connection,'wadoku-structure-luna',args.work_dir/'outbox',run_id=run_id,
                 kind='classification',model_id='gpt-5.6-luna',reasoning_effort='medium',transport='codex-agent',batch_id=request['batch_id'])
@@ -178,9 +183,9 @@ def main():
             started=time.monotonic()
             event('attempt_queued', run_id=run_id, entry_id=request['entry']['entry_id'], batch_id=item['batch_id'], attempt_id=item['attempt_id'])
             future=executor.submit(logged_dispatch,dispatch_one,item,runtime_prompt,'classification',request_timeout_seconds=240,output_schema=schema)
-            futures[future]=(request,item,input_bound,output_reserve,started)
+            futures[future]=(request,item,input_bound,reserved_output,started)
         for future in as_completed(futures):
-            request,item,input_bound,output_reserve,started=futures[future]
+            request,item,input_bound,reserved_output,started=futures[future]
             result=future.result()
             atomic_write(Path(item['response_path']).with_suffix('.events.jsonl'),result.stdout.encode())
             atomic_write(Path(item['response_path']).with_suffix('.stderr.txt'),result.stderr.encode())
@@ -198,7 +203,7 @@ def main():
                     errors=[str(error)]
             if result.usage is not None:
                 usage=result.usage
-                if usage['input_tokens']>input_bound or usage['output_tokens']>output_reserve:
+                if usage['input_tokens']>input_bound or usage['output_tokens']>reserved_output:
                     errors.append('actual usage exceeded request reservation; recalibrate before next task')
                 record_attempt_usage(connection,item['attempt_id'],effective_model_id=item['model_id'],
                     reasoning_effort=item['reasoning_effort'],transport='codex-agent',
@@ -222,7 +227,7 @@ def main():
                         AND parent_id=? AND child_id=? AND relation_path=?''',
                         (canonical_json({**record,'result':decision}).decode(),args.scope_id,candidate['parent_id'],candidate['child_id'],candidate['relation_path']))
             audit(connection,'wadoku_classification_result','attempt',item['attempt_id'],{'errors':errors,'entry_id':request['entry']['entry_id'],
-                'input_budget_estimate':input_bound,'output_reserve':output_reserve,'actual_usage':result.usage})
+                'input_budget_estimate':input_bound,'output_reserve':reserved_output,'actual_usage':result.usage})
             connection.commit()
             event('attempt_result', run_id=run_id, entry_id=request['entry']['entry_id'], batch_id=item['batch_id'],
                   attempt_id=item['attempt_id'], status=status, errors=errors, latency_ms=result.latency_ms)
