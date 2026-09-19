@@ -93,7 +93,7 @@ def main():
         if missing:
             raise RuntimeError(f'{missing} entries still need classification; see classification logs')
         translation_log=stage('translation', ['scripts/wadoku_translate_window.py', '--scope-id', args.scope_id,
-            '--candidate-scope', '--max-batches', str(count),
+            '--candidate-scope', '--max-batches', str(min(5000, count)),
             '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '128000',
             '--event-log', str(args.work_dir / 'translation.jsonl')])
         translation_result=next((json.loads(line) for line in reversed(translation_log.read_text().splitlines())
