@@ -154,9 +154,16 @@ def dispatch_window(config,c,run_id,ordinal,work,prompt,context_budget,max_batch
                               error=str(error),traceback=traceback.format_exc())
                     if hasattr(c, 'execute'):
                         total_articles=c.execute('SELECT count(*) FROM run_article WHERE run_id=?',(run_id,)).fetchone()[0]
-                        completed_articles=c.execute('''SELECT count(*) FROM run_article ra WHERE ra.run_id=?
-                            AND NOT EXISTS (SELECT 1 FROM translation_unit u WHERE u.run_id=ra.run_id AND u.article_id=ra.article_id
-                                AND NOT EXISTS (SELECT 1 FROM translation t WHERE t.run_id=u.run_id AND t.unit_id=u.id))''',(run_id,)).fetchone()[0]
+                        completed_articles=c.execute('''WITH expected AS (
+                                SELECT article_id,count(*) AS units FROM translation_unit
+                                WHERE run_id=? GROUP BY article_id
+                            ), done AS (
+                                SELECT u.article_id,count(DISTINCT t.unit_id) AS units
+                                FROM translation_unit u JOIN translation t
+                                  ON t.run_id=u.run_id AND t.unit_id=u.id
+                                WHERE u.run_id=? GROUP BY u.article_id
+                            ) SELECT count(*) FROM expected e JOIN done d USING(article_id)
+                              WHERE e.units=d.units''',(run_id,run_id)).fetchone()[0]
                         event('translation_progress',run_id=run_id,total=total_articles,completed=completed_articles,
                               remaining=total_articles-completed_articles,
                               elapsed_s=round(time.monotonic()-started,3))
