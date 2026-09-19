@@ -49,7 +49,11 @@ def export(run_id, root, scope, packet):
     from psycopg.conninfo import conninfo_to_dict
     if conninfo_to_dict(config.database_url()).get('dbname')!='wadoku_rich_pilot': raise ValueError('pilot DB only')
     expected={e['entry_id'] for e in scope['entries']}
-    if len(expected)!=200 or {a['entry_id'] for a in packet['articles']}!=expected: raise ValueError('exact 200-entry scope required')
+    source_count=scope['manifest']['entry_count']
+    if not 1 <= source_count <= 5000 or len(expected)!=source_count:
+        raise ValueError('inspection scope count differs from its manifest')
+    if {a['entry_id'] for a in packet['articles']}!=expected:
+        raise ValueError('review packet differs from the exact frozen scope')
     db=Database(config)
     with db.connect() as c:
         entries=[(apply_stored_resolutions(c,run_id,v),t) for v,t in localized_run(c,run_id,allow_unreviewed=True)]
@@ -88,22 +92,24 @@ def export(run_id, root, scope, packet):
             for row in rows: row[5]=[warning,*row[5]]
             issues.append({'id':f'STR-{eid}','entry_id':eid,'category':'structure','severity':'warning','message':' '.join(warnings)})
         rendered[eid]=(rows,meta);coverage[str(eid)]={'sequences':sorted({r[6] for r in rows}),'keys':[[r[0],r[1]] for r in rows]}
-    output=root/'site/dist/wadoku-stress200.zip'
+    archive_name='wadoku-stress200.zip' if source_count==200 else f'wadoku-first{source_count}-run{run_id}.zip'
+    output=root/'site/dist'/archive_name
     license_path=Path('work/wadoku-xml/source/wadoku-xml-20260705/LICENCE')
     candidates=list(license_path.parent.glob('*'))
     license_path=next((p for p in candidates if p.is_file() and p.stat().st_size<100000 and sha256_file(p)==config.raw['source']['license_sha256']),None)
     if license_path is None: raise ValueError('verified source license absent')
     report=build_rich_archive(iter(entries),output,language='ru',labels=labels,license_text=license_path.read_bytes(),
-        title=f'Wadoku RU · стресс 200 · {run_id}',revision=f'stress200-run-{run_id}',source_url=config.raw['source']['url'],
+        title=f'Wadoku RU · диагностика {source_count} · {run_id}',revision=f'diagnostic-{source_count}-run-{run_id}',source_url=config.raw['source']['url'],
         source_sha256=config.raw['source']['sha256'],export_audit_id=f'inspection-{run_id}',
-        row_factory=lambda value,*args:rendered[value['entry_id']],description_note='Диагностический пилот. Только 200 выбранных исходных записей. Известные ошибки и неразрешённые шаблоны указаны на странице проверки. Не релиз.')
+        row_factory=lambda value,*args:rendered[value['entry_id']],description_note=f'Диагностический словарь. Только {source_count} замороженных исходных записей. Автоматические структурные предупреждения указаны на странице проверки. Не релиз.')
     prefix_sequences = {(g['expression'],g['reading'],s):g['sequence']
                         for g in report['prefix_lookup_groups'] for s in g['source_sequences']}
     for eid, item in coverage.items():
         item['sequences'] = sorted({prefix_sequences.get((r[0],r[1],r[6]),r[6])
                                     for r in rendered[int(eid)][0]})
     report.update(validate_archive(output,Path('schemas/yomitan-77e200428902abf4fa48284df92da7af3dcb4162')))
-    report.update(run_id=run_id,sha256=sha256_file(output),source_entries=200,release_approved=False,issues=issues,coverage=coverage)
+    report.update(run_id=run_id,sha256=sha256_file(output),source_entries=source_count,
+                  archive_name=archive_name,release_approved=False,issues=issues,coverage=coverage)
     atomic_write(root/'export-report.json',canonical_json(report));return report
 
 
@@ -124,6 +130,7 @@ def render(node):
 
 def site(root,scope,packet,report):
     from wadoku_select200 import CATEGORIES
+    category_labels={**CATEGORIES,'source-prefix':'Первые записи источника'}
     issue_file=root/'manual-issues.json'
     manual=json.loads(issue_file.read_text()) if issue_file.exists() else []
     issues=manual+report['issues']; by_entry={}
@@ -134,7 +141,7 @@ def site(root,scope,packet,report):
             text+=f' <a href="{html.escape(i["source_url"],quote=True)}">Источник проверки</a>'
         return f'[{levels.get(i["severity"],i["severity"])}] '+text
     for issue in issues: by_entry.setdefault(issue['entry_id'],[]).append(issue)
-    with zipfile.ZipFile(root/'site/dist/wadoku-stress200.zip') as z:
+    with zipfile.ZipFile(root/'site/dist'/report['archive_name']) as z:
         rows=[r for n in z.namelist() if n.startswith('term_bank_') for r in json.loads(z.read(n))]
         css=z.read('styles.css')
     by_sequence={}
@@ -148,13 +155,15 @@ def site(root,scope,packet,report):
         keys='　'.join(dict.fromkeys(k[0] for k in report['coverage'][str(eid)]['keys']))
         cards.append(f'<details class="entry" id="e{eid}" data-category="{category}" data-errors="{bool(errors)}"><summary><span lang="ja">{html.escape(article["expression"])}</span> <small>{html.escape(article["reading"])} · {eid} {"⚠" if errors else ""}</small></summary>{error_html}<p class="keys" lang="ja">{html.escape(keys)}</p><div class="dictionary">{bodies}</div></details>')
     issues_html=''.join(f'<p><a href="#e{i["entry_id"]}">{html.escape(i["id"])}</a> · {html.escape(i["category"])} — {issue_text(i)}</p>' for i in issues)
-    options=''.join(f'<option value="{k}">{html.escape(v)}</option>' for k,v in CATEGORIES.items())
-    page='''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wadoku — стресс-пилот 200</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="review.css"><body><main>
-<header><h1>Wadoku · 200 новых статей</h1><p>Перевод Luna, вычитка Astra. Диагностический словарь с известными ошибками, не релиз.</p><a class="download" href="wadoku-stress200.zip">Скачать Yomitan ZIP</a><p>Отключите прошлые пилоты, импортируйте ZIP и сканируйте японский текст. Здесь показан текст из этого же ZIP; настоящий popup проверяйте в Yomitan.</p></header>
+    options=''.join(f'<option value="{k}">{html.escape(category_labels.get(k,k))}</option>'
+                    for k in scope['manifest']['category_counts'])
+    page='''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wadoku — диагностика COUNT статей</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="review.css"><body><main>
+<header><h1>Wadoku · COUNT статей</h1><p>Перевод Luna. Автоматическая структурная диагностика. Полная ручная вычитка не проводилась; это не релиз.</p><a class="download" href="ARCHIVE">Скачать Yomitan ZIP</a><p>Отключите прошлые пилоты, импортируйте ZIP и сканируйте японский текст. Здесь показан текст из этого же ZIP; настоящий popup проверяйте в Yomitan.</p></header>
 <details class="errors"><summary>Найденные проблемы — COUNT</summary>ISSUES</details>
 <nav><input id="search" aria-label="Найти статью" placeholder="Слово, чтение или ID"><select id="category" aria-label="Категория"><option value="">Все категории</option>OPTIONS</select><label><input type="checkbox" id="errorsOnly"> Только с замечаниями</label><output id="count"></output></nav>
 CARDS</main><script src="review.js"></script></body></html>'''
-    page=page.replace('COUNT',str(len(issues))).replace('ISSUES',issues_html).replace('OPTIONS',options).replace('CARDS',''.join(cards))
+    page=page.replace('COUNT',str(len(cards)),2).replace('ARCHIVE',html.escape(report['archive_name'],quote=True))
+    page=page.replace('COUNT',str(len(issues)),1).replace('ISSUES',issues_html).replace('OPTIONS',options).replace('CARDS',''.join(cards))
     atomic_write(root/'site/dist/index.html',page.encode());atomic_write(root/'site/dist/styles.css',css)
     for name in ('review.css','review.js'):
         atomic_write(root/'site/dist'/name,(Path('assets/wadoku-review')/name).read_bytes())
