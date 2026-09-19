@@ -39,6 +39,7 @@ def test_progress_report_separates_transport_and_classification_contract_errors(
     assert error_class(['template has neither an alias nor an unresolved reason']) == 'classification_contract'
     assert error_class(['selected example is not eligible']) == 'classification_contract'
     assert error_class(['duplicate selected example ID']) == 'classification_contract'
+    assert error_class(['unexpanded example template selected']) == 'classification_contract'
 
 
 def test_review_sample_is_deterministic_and_stays_inside_each_5000_block():
