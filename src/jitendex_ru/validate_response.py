@@ -932,7 +932,9 @@ def ingest_response(connection: ConnectionLike, path: Path) -> dict[str, int]:
     connection.execute(
         """UPDATE validation_issue SET resolved_at=CURRENT_TIMESTAMP,
         waiver_reason='superseded by a later deterministically valid response for the same batch'
-        WHERE resolved_at IS NULL AND validator='deterministic-v1' AND attempt_id IN (
+        WHERE resolved_at IS NULL
+        AND validator IN ('deterministic-v1','deterministic-alignment-v1')
+        AND attempt_id IN (
           SELECT id FROM attempt WHERE batch_id=? AND id<>?
         )""",
         (attempt["batch_id"], attempt["id"]),
