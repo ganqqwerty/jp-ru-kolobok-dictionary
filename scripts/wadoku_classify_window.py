@@ -45,14 +45,13 @@ def main():
         raise ValueError('choose a bounded window of 1–5000 tasks')
     if not 1<=args.concurrency<=100:
         raise ValueError('pilot concurrency must be 1–100')
-    if not 1<=args.context_budget<=128000:
-        raise ValueError('pilot context budget must be at most 128000')
-    if args.context_budget>96000:
-        cache=json.loads((Path.home()/'.codex/models_cache.json').read_text())
-        model=next(item for item in cache['models'] if item['slug']=='gpt-5.6-luna')
-        effective=model['context_window']*model['effective_context_window_percent']//100
-        if args.context_budget>effective//2:
-            raise ValueError('requested budget exceeds half the locally configured effective model context')
+    if args.context_budget < 1:
+        raise ValueError('context budget must be positive')
+    cache=json.loads((Path.home()/'.codex/models_cache.json').read_text())
+    model=next(item for item in cache['models'] if item['slug']=='gpt-5.6-luna')
+    effective=model['context_window']*model['effective_context_window_percent']//100
+    if args.context_budget>effective:
+        raise ValueError('requested budget exceeds the locally configured effective model context')
     config=load_profile(args.config)
     from psycopg.conninfo import conninfo_to_dict
     if config.db_backend!='postgresql' or conninfo_to_dict(config.database_url()).get('dbname')!='wadoku_rich_pilot':

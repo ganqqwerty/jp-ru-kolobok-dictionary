@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--concurrency', type=int, default=100)
     parser.add_argument('--articles-per-batch', type=int, default=6)
     parser.add_argument('--classification-window-size', type=int, default=1000)
+    parser.add_argument('--classification-context-budget', type=int, default=240000)
     parser.add_argument('--event-log', type=Path)
     args = parser.parse_args()
     if not 1 <= args.concurrency <= 100:
@@ -75,7 +76,7 @@ def main():
             if not missing:
                 break
             log = stage(f'classification-window{attempt:03d}', ['scripts/wadoku_classify_window.py', '--scope-id', args.scope_id,
-                '--limit', str(min(args.classification_window_size, missing)), '--concurrency', str(args.concurrency), '--context-budget', '128000',
+                '--limit', str(min(args.classification_window_size, missing)), '--concurrency', str(args.concurrency), '--context-budget', str(args.classification_context_budget),
                 '--work-dir', str(args.work_dir / 'classification'), '--event-log', str(args.work_dir / 'classification.jsonl')])
             summary = next((json.loads(line)['classification_window'] for line in reversed(log.read_text().splitlines())
                             if line.startswith('{"classification_window"')), None)
