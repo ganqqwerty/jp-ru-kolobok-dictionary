@@ -607,7 +607,7 @@ def split_ready_batch(connection: ConnectionLike, batch_id: str, *, reason: str)
         batch = connection.execute("SELECT * FROM batch WHERE id=?" + lock, (batch_id,)).fetchone()
         if batch is None or batch["state"] != "ready":
             return {"batch_id": batch_id, "requeued": False, "split": False}
-        return _split_batch_locked(connection, batch, reason=reason)
+        return _split_batch_locked(connection, batch, reason=reason, block_indivisible=False)
 
 
 def close_superseded_batches(connection: ConnectionLike, run_id: int) -> list[str]:
@@ -666,7 +666,9 @@ def _retry_or_split_locked(
     return _split_batch_locked(connection, batch, reason="validation retries exhausted")
 
 
-def _split_batch_locked(connection: ConnectionLike, batch: Any, *, reason: str) -> dict[str, Any]:
+def _split_batch_locked(
+    connection: ConnectionLike, batch: Any, *, reason: str, block_indivisible: bool = True,
+) -> dict[str, Any]:
     batch_id = batch["id"]
     manifest = json.loads(Path(batch["manifest_path"]).read_text(encoding="utf-8"))
     articles = manifest["articles"]
@@ -679,10 +681,14 @@ def _split_batch_locked(connection: ConnectionLike, batch: Any, *, reason: str) 
         for unit in units:
             packets.setdefault(unit.get("packet_id", unit["unit_id"]), []).append(unit)
         if len(packets) < 2:
-            connection.execute("UPDATE batch SET state='blocked' WHERE id=?", (batch_id,))
-            audit(connection, "block", "batch", batch_id,
-                  {"reason": f"indivisible meaning packet: {reason}"})
-            return {"batch_id": batch_id, "requeued": False, "split": False, "blocked": True}
+            if block_indivisible:
+                connection.execute("UPDATE batch SET state='blocked' WHERE id=?", (batch_id,))
+                audit(connection, "block", "batch", batch_id,
+                      {"reason": f"indivisible meaning packet: {reason}"})
+            else:
+                audit(connection, "preflight_indivisible", "batch", batch_id, {"reason": reason})
+            return {"batch_id": batch_id, "requeued": False, "split": False,
+                    "blocked": block_indivisible, "indivisible": True}
         packet_list = list(packets.values())
         midpoint = len(packet_list) // 2
         groups = []

@@ -106,7 +106,7 @@ def main():
             raise RuntimeError(f'{missing} entries still need classification; see classification logs')
         translation_log=stage('translation', ['scripts/wadoku_translate_window.py', '--scope-id', args.scope_id,
             '--candidate-scope', '--max-batches', str(min(5000, count)),
-            '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '128000',
+            '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '192000',
             '--event-log', str(args.work_dir / 'translation.jsonl')])
         run_id = translation_run_id(translation_log)
         translation_window = 1
@@ -126,7 +126,7 @@ def main():
             translation_log = stage(f'translation-window{translation_window:03d}',
                 ['scripts/wadoku_translate_window.py', '--run-id', str(run_id),
                  '--max-batches', '5000', '--concurrency', str(args.concurrency),
-                 '--context-budget', '128000', '--event-log', str(args.work_dir / 'translation.jsonl')])
+                 '--context-budget', '192000', '--event-log', str(args.work_dir / 'translation.jsonl')])
             if translation_run_id(translation_log) != run_id:
                 raise RuntimeError('translation resume changed the frozen run identity')
         stage('progress-report', ['scripts/wadoku_progress_report.py','--scope-id',args.scope_id,

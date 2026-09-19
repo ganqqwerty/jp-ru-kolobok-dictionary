@@ -223,13 +223,13 @@ def main():
         raise ValueError('concurrency must be 1–100')
     if args.articles_per_batch is not None and (not 1 <= args.articles_per_batch <= 100 or args.run_id is not None):
         raise ValueError('articles-per-batch is 1–100 and only for a new run')
-    if not 1 <= args.context_budget <= 128000:
-        raise ValueError('context reservation must be at most 128000')
-    if args.context_budget > 96000:
-        cache=json.loads((Path.home()/'.codex/models_cache.json').read_text())
-        model=next(m for m in cache['models'] if m['slug']=='gpt-5.6-luna')
-        if args.context_budget > model['context_window']*model['effective_context_window_percent']//200:
-            raise ValueError('reservation exceeds half the effective context')
+    if args.context_budget < 1:
+        raise ValueError('context reservation must be positive')
+    cache=json.loads((Path.home()/'.codex/models_cache.json').read_text())
+    model=next(m for m in cache['models'] if m['slug']=='gpt-5.6-luna')
+    effective=model['context_window']*model['effective_context_window_percent']//100
+    if args.context_budget > effective:
+        raise ValueError('reservation exceeds the locally configured effective model context')
     config=load_profile(args.config)
     from psycopg.conninfo import conninfo_to_dict
     if config.db_backend!='postgresql' or conninfo_to_dict(config.database_url()).get('dbname')!='wadoku_rich_pilot':
