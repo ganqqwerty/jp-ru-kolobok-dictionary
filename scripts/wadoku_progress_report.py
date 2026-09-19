@@ -84,12 +84,17 @@ def build(scope_id, log_dir, run_id=None):
                     random_article={'batch_id':classified_batch['id'],'finished_at':str(classified_batch['completed_at']),
                         'stage':'classification','entry_id':entry_id,'expression':expression,'reading':reading,
                         'article_policy':decision.get('article_policy') if decision else None,
-                        'lookup_policy':decision.get('lookup_policy') if decision else None}
+                        'parent_id':decision.get('parent_id') if decision else None,
+                        'lookup_policy':decision.get('lookup_policy') if decision else None,
+                        'lookup_aliases':decision.get('lookup_aliases',[]) if decision else [],
+                        'lookup_needs_review':decision.get('lookup_needs_review') if decision else None,
+                        'reason':decision.get('reason') if decision else None,
+                        'confidence':decision.get('confidence') if decision else None}
     finally:
         db.close()
     failed=timeline['failed_attempts']; classes=Counter(error_class(item.get('errors') or item) for item in failed)
     attempts=timeline['attempt_count']
-    return {'schema_version':1,'generated_utc':datetime.now(timezone.utc).isoformat(),
+    return {'schema_version':2,'generated_utc':datetime.now(timezone.utc).isoformat(),
         'scope_id':scope_id,'run_id':run_id,'scope_entries':total,'classified_articles':classified,
         'translated_articles':translated,'translation_units':units,'translated_units':translated_units,
         'elapsed_wall_s':timeline['wall_including_inter_iteration_review_s'],
