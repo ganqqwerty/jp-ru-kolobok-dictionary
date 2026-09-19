@@ -600,6 +600,16 @@ def retry_or_split(connection: ConnectionLike, batch_id: str, *, max_attempts: i
         return _retry_or_split_locked(connection, batch_id, max_attempts=max_attempts)
 
 
+def split_ready_batch(connection: ConnectionLike, batch_id: str, *, reason: str) -> dict[str, Any]:
+    """Split an oversized ready batch before claiming a worker attempt."""
+    with transaction(connection, immediate=True):
+        lock = " FOR UPDATE" if getattr(connection, "backend", "sqlite") == "postgresql" else ""
+        batch = connection.execute("SELECT * FROM batch WHERE id=?" + lock, (batch_id,)).fetchone()
+        if batch is None or batch["state"] != "ready":
+            return {"batch_id": batch_id, "requeued": False, "split": False}
+        return _split_batch_locked(connection, batch, reason=reason)
+
+
 def close_superseded_batches(connection: ConnectionLike, run_id: int) -> list[str]:
     """Close queued split batches whose units were satisfied by another batch."""
     rows = connection.execute(
@@ -653,6 +663,11 @@ def _retry_or_split_locked(
         audit(connection, "retry", "batch", batch_id, {"attempt_count": batch["attempt_count"]})
         return {"batch_id": batch_id, "requeued": True, "split": False}
 
+    return _split_batch_locked(connection, batch, reason="validation retries exhausted")
+
+
+def _split_batch_locked(connection: ConnectionLike, batch: Any, *, reason: str) -> dict[str, Any]:
+    batch_id = batch["id"]
     manifest = json.loads(Path(batch["manifest_path"]).read_text(encoding="utf-8"))
     articles = manifest["articles"]
     if len(articles) > 1:
@@ -665,7 +680,8 @@ def _retry_or_split_locked(
             packets.setdefault(unit.get("packet_id", unit["unit_id"]), []).append(unit)
         if len(packets) < 2:
             connection.execute("UPDATE batch SET state='blocked' WHERE id=?", (batch_id,))
-            audit(connection, "block", "batch", batch_id, {"reason": "indivisible meaning packet exhausted retries"})
+            audit(connection, "block", "batch", batch_id,
+                  {"reason": f"indivisible meaning packet: {reason}"})
             return {"batch_id": batch_id, "requeued": False, "split": False, "blocked": True}
         packet_list = list(packets.values())
         midpoint = len(packet_list) // 2
@@ -700,5 +716,5 @@ def _retry_or_split_locked(
         """UPDATE validation_issue SET resolved_at=CURRENT_TIMESTAMP,waiver_reason='superseded by deterministic split'
         WHERE attempt_id IN (SELECT id FROM attempt WHERE batch_id=?) AND resolved_at IS NULL""", (batch_id,)
     )
-    audit(connection, "split", "batch", batch_id, {"children": children})
+    audit(connection, "split", "batch", batch_id, {"children": children, "reason": reason})
     return {"batch_id": batch_id, "requeued": False, "split": True, "children": children}

@@ -10,7 +10,7 @@ import time
 
 from jitendex_ru.config import Config
 from jitendex_ru.database import Database
-from jitendex_ru.batch import make_batches, claim, retry_or_split
+from jitendex_ru.batch import make_batches, claim, retry_or_split, split_ready_batch
 from jitendex_ru.db import record_attempt_usage, audit
 from jitendex_ru.util import canonical_json, sha256_file, sha256_bytes, atomic_write
 from jitendex_ru.validate_response import ingest_response, ValidationFailure
@@ -63,7 +63,16 @@ def dispatch_batch(config,run_id,batch,work,prompt,context_budget,database=None)
         schema=build_output_schema(request,'translation')
         supplied=request_path.stat().st_size+len(prompt.encode())+len(canonical_json(schema))+32768
         if supplied+12000>context_budget:
-            raise ValueError('complete request exceeds diagnostic context reservation before claim')
+            recovery = split_ready_batch(
+                c, batch['id'],
+                reason=f'complete request reservation {supplied + 12000} exceeds {context_budget}',
+            )
+            c.commit()
+            event('preflight_split', run_id=run_id, batch_id=batch['id'],
+                  request_reservation=supplied+12000, context_budget=context_budget, recovery=recovery)
+            if not recovery.get('split'):
+                raise ValueError('complete request exceeds context reservation and is indivisible')
+            return recovery
         item=claim(c,'wadoku-rich-luna',work/'outbox',run_id=run_id,kind='translation',
                    model_id='gpt-5.6-luna',reasoning_effort='medium',transport='codex-agent',batch_id=batch['id'])
         if item is None:
