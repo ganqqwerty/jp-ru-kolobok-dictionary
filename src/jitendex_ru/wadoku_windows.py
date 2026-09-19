@@ -122,6 +122,77 @@ def source_echo_warnings(translations: list[dict[str, Any]]) -> list[dict[str, A
     return warnings
 
 
+def invalidate_accepted_alignment_failures(
+    connection: Any, run_id: int, attempt_ids: list[str],
+) -> dict[str, Any]:
+    """Reopen exact accepted attempts that fail the current alignment gate."""
+    from .validate_response import validate_worker_payload
+
+    if not attempt_ids or len(attempt_ids) != len(set(attempt_ids)):
+        raise ValueError('supply distinct accepted attempt IDs')
+    connection.execute('SELECT id FROM run WHERE id=? FOR UPDATE', (run_id,)).fetchone()
+    repaired = []
+    for attempt_id in attempt_ids:
+        attempt = connection.execute('SELECT * FROM attempt WHERE id=?', (attempt_id,)).fetchone()
+        if not attempt or attempt['outcome'] != 'accepted':
+            raise ValueError(f'alignment repair requires an accepted attempt: {attempt_id}')
+        batch = connection.execute('SELECT * FROM batch WHERE id=? FOR UPDATE', (attempt['batch_id'],)).fetchone()
+        if (not batch or batch['run_id'] != run_id or batch['kind'] != 'translation'
+                or batch['state'] != 'deterministic_validated'):
+            raise ValueError(f'alignment repair requires the active validated batch: {attempt_id}')
+        response_path = Path(attempt['response_path'])
+        payload = json.loads(response_path.read_text(encoding='utf-8'))
+        issues = validate_worker_payload(connection, attempt, payload)
+        alignment = [i for i in issues if i['code'] == 'wadoku_cross_article_duplicate_target']
+        if not alignment or len(alignment) != len(issues):
+            raise ValueError(f'attempt does not fail only the alignment gate: {attempt_id}: {issues}')
+        translations = connection.execute(
+            'SELECT id,accepted FROM translation WHERE attempt_id=? ORDER BY id', (attempt_id,),
+        ).fetchall()
+        expected = int(batch['unit_count'])
+        if len(translations) != expected or any(row['accepted'] for row in translations):
+            raise ValueError(f'alignment repair found reviewed or incomplete output: {attempt_id}')
+        marks = ','.join('?' for _ in translations)
+        if translations and connection.execute(
+            f'SELECT 1 FROM review WHERE translation_id IN ({marks}) LIMIT 1',
+            tuple(row['id'] for row in translations),
+        ).fetchone():
+            raise ValueError(f'alignment repair cannot replace reviewed output: {attempt_id}')
+        connection.execute('DELETE FROM translation WHERE attempt_id=?', (attempt_id,))
+        connection.execute(
+            """UPDATE translation_unit SET status='ready' WHERE id IN
+            (SELECT unit_id FROM batch_item WHERE batch_id=?)""", (batch['id'],),
+        )
+        error_json = canonical_json(alignment).decode()
+        connection.execute(
+            "UPDATE attempt SET outcome='rejected',error_json=? WHERE id=?",
+            (error_json, attempt_id),
+        )
+        connection.execute(
+            """UPDATE batch SET state='ready',lease_token=NULL,lease_expires_at=NULL
+            WHERE id=?""", (batch['id'],),
+        )
+        for issue in alignment:
+            connection.execute(
+                """INSERT INTO validation_issue
+                (run_id,unit_id,attempt_id,validator,severity,code,details_json)
+                VALUES (?,NULL,?,'deterministic-alignment-v1','error',?,?)""",
+                (run_id, attempt_id, issue['code'], canonical_json(issue).decode()),
+            )
+        connection.execute(
+            """UPDATE wadoku_window SET state='repair',analysis_json=NULL
+            WHERE run_id=? AND state<>'continue' AND batch_ids_json LIKE ?""",
+            (run_id, f'%"{batch["id"]}"%'),
+        )
+        record = {
+            'attempt_id': attempt_id, 'batch_id': batch['id'], 'translations_removed': expected,
+            'issues': alignment, 'response_path': str(response_path),
+        }
+        audit(connection, 'wadoku_alignment_invalidation', 'attempt', attempt_id, record)
+        repaired.append(record)
+    return {'run_id': run_id, 'invalidated_attempts': repaired}
+
+
 def begin_window(connection: Any, run_id: int, count: int) -> dict[str, Any]:
     if count < 1:
         raise ValueError('window batch count must be positive')
