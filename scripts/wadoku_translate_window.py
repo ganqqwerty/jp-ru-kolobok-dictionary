@@ -203,8 +203,9 @@ def main():
                         help='Focused diagnostic only: translate unresolved entries without adopting failed structure')
     parser.add_argument('--candidate-subset',type=int,nargs='+',
                         help='Diagnostic source entry IDs, preserving candidate example context')
+    parser.add_argument('--candidate-subset-file',type=Path)
     parser.add_argument('--prepare-only',action='store_true')
-    parser.add_argument('--reuse-from-run',type=int)
+    parser.add_argument('--reuse-from-run',type=int,action='append',default=[])
     parser.add_argument('--entry-ids',type=int,nargs='+')
     parser.add_argument('--max-batches',type=int,default=4)
     parser.add_argument('--concurrency',type=int,default=3)
@@ -214,18 +215,25 @@ def main():
     parser.add_argument('--config', type=Path, default=DEFAULT_PROFILE)
     parser.add_argument('--prompt',type=Path)
     args=parser.parse_args()
+    if args.candidate_subset_file:
+        if args.candidate_subset:
+            raise ValueError('choose subset IDs or a selection file')
+        selection=json.loads(args.candidate_subset_file.read_text())
+        if selection.get('scope_id')!=args.scope_id:
+            raise ValueError('pilot selection belongs to a different scope')
+        args.candidate_subset=selection['entry_ids']
     candidate_subset = args.candidate_subset
     if args.unclassified_source_only and (not args.candidate_scope or args.run_id is not None):
         raise ValueError('unclassified source fallback requires a new focused candidate scope')
     if candidate_subset:
         if args.run_id is not None or args.entry_ids or args.candidate_scope or not args.scope_id:
             raise ValueError('candidate subset requires only scope ID and diagnostic entry IDs')
-        if not 1 <= len(candidate_subset) <= 10 or len(set(candidate_subset)) != len(candidate_subset):
-            raise ValueError('candidate subset requires 1–10 distinct source entries')
+        if not 1 <= len(candidate_subset) <= 100 or len(set(candidate_subset)) != len(candidate_subset):
+            raise ValueError('candidate subset requires 1–100 distinct source entries')
         args.candidate_scope = True
     if args.run_id is not None and (args.entry_ids or args.scope_id or args.candidate_scope):
         raise ValueError('--run-id resumes frozen input; do not supply entries or scope')
-    if args.reuse_from_run is not None and (args.run_id is not None or not args.candidate_scope):
+    if args.reuse_from_run and (args.run_id is not None or not args.candidate_scope):
         raise ValueError('translation reuse requires a new complete candidate scope')
     if args.candidate_scope and args.entry_ids:
         raise ValueError('candidate scope always includes the entire frozen pilot')
@@ -337,14 +345,21 @@ def main():
             prepared=prepare_run(c,snapshot_id=scope['snapshot_id'],entries=entries,versions=versions,
                 limits=limits,decisions=decisions,example_sources=children)
         run_id=prepared['run_id']
-        if args.reuse_from_run is not None:
+        if args.reuse_from_run:
             scope_manifest=json.loads(scope['manifest_json'])
-            previous=c.execute('SELECT limits_json FROM run WHERE id=?',(args.reuse_from_run,)).fetchone()
-            if (scope_manifest.get('version')!='wadoku-linked-prefix-scope-v2' or not previous
-                    or json.loads(previous['limits_json']).get('scope_id')!=scope_manifest['retained_scope_id']):
-                raise ValueError('source run does not match retained scope')
-            reused=reuse_accepted_translations(c,args.reuse_from_run,run_id)
-            event('translation_reuse',run_id=run_id,**reused)
+            if scope_manifest.get('version')!='wadoku-linked-prefix-scope-v2':
+                raise ValueError('translation reuse requires the extended scope')
+            for source_run_id in dict.fromkeys(args.reuse_from_run):
+                previous=c.execute('SELECT limits_json FROM run WHERE id=?',(source_run_id,)).fetchone()
+                if not previous or source_run_id==run_id:
+                    raise ValueError('invalid translation reuse source run')
+                previous_limits=json.loads(previous['limits_json'])
+                if previous_limits.get('scope_id') not in {scope_manifest['retained_scope_id'],args.scope_id}:
+                    raise ValueError('source run does not match retained or pilot scope')
+                if previous_limits.get('scope_id')==args.scope_id and not previous_limits.get('candidate_subset'):
+                    raise ValueError('same-scope reuse source is not a pilot subset')
+                reused=reuse_accepted_translations(c,source_run_id,run_id)
+                event('translation_reuse',run_id=run_id,**reused)
         work=Path('work/wadoku-xml/pilot-v6/translation')/str(run_id)
         run_limits=json.loads(c.execute('SELECT limits_json FROM run WHERE id=?',(run_id,)).fetchone()[0])
         make_batches(c,run_id,work/'inbox',{},run_limits.get('articles_per_batch',1),24000,100,16000,96000,150)
