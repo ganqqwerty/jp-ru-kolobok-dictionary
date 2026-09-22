@@ -301,6 +301,7 @@ def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int,
         raise ValueError('full XML entry count differs')
     retained = json.loads(retained_scope.read_text()) if retained_scope else None
     retained_ids = {entry['entry_id'] for entry in retained['entries']} if retained else set()
+    retained_entries = {entry['entry_id']: entry for entry in retained['entries']} if retained else {}
     if retained:
         old_manifest = retained['manifest']
         if (old_manifest.get('version') not in {'wadoku-linked-prefix-scope-v1', 'wadoku-linked-prefix-scope-v2'}
@@ -329,6 +330,11 @@ def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int,
     for ordinal, value in iter_canonical_entries(source):
         entry_id = int(value['entry_id'])
         if entry_id in selected:
+            if entry_id in retained_entries:
+                old = retained_entries[entry_id]
+                if old['ordinal'] != ordinal or old['source']['entry_id'] != entry_id:
+                    raise ValueError('retained source identity or ordinal changed')
+                value = old['source']
             if entry_id in retained_ids:
                 categories = ['retained-source-entry']
             elif entry_id in seed_ids:

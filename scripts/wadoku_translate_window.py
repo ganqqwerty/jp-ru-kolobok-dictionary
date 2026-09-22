@@ -21,6 +21,7 @@ from jitendex_ru.wadoku_retry import retry_prompt, save_runtime_prompt
 from jitendex_ru.wadoku_telemetry import event, logged_dispatch, run_logged
 from jitendex_ru.wadoku_profile import DEFAULT_PROFILE, load_profile, resolve_prompt
 from jitendex_ru.wadoku_wire import translation_wire
+from jitendex_ru.jpdb_scope import reuse_accepted_translations
 from run_codex_batches import dispatch_one, build_output_schema
 
 
@@ -203,6 +204,7 @@ def main():
     parser.add_argument('--candidate-subset',type=int,nargs='+',
                         help='Diagnostic source entry IDs, preserving candidate example context')
     parser.add_argument('--prepare-only',action='store_true')
+    parser.add_argument('--reuse-from-run',type=int)
     parser.add_argument('--entry-ids',type=int,nargs='+')
     parser.add_argument('--max-batches',type=int,default=4)
     parser.add_argument('--concurrency',type=int,default=3)
@@ -223,6 +225,8 @@ def main():
         args.candidate_scope = True
     if args.run_id is not None and (args.entry_ids or args.scope_id or args.candidate_scope):
         raise ValueError('--run-id resumes frozen input; do not supply entries or scope')
+    if args.reuse_from_run is not None and (args.run_id is not None or not args.candidate_scope):
+        raise ValueError('translation reuse requires a new complete candidate scope')
     if args.candidate_scope and args.entry_ids:
         raise ValueError('candidate scope always includes the entire frozen pilot')
     if args.run_id is None and (not args.scope_id or (not args.entry_ids and not args.candidate_scope)):
@@ -333,6 +337,14 @@ def main():
             prepared=prepare_run(c,snapshot_id=scope['snapshot_id'],entries=entries,versions=versions,
                 limits=limits,decisions=decisions,example_sources=children)
         run_id=prepared['run_id']
+        if args.reuse_from_run is not None:
+            scope_manifest=json.loads(scope['manifest_json'])
+            previous=c.execute('SELECT limits_json FROM run WHERE id=?',(args.reuse_from_run,)).fetchone()
+            if (scope_manifest.get('version')!='wadoku-linked-prefix-scope-v2' or not previous
+                    or json.loads(previous['limits_json']).get('scope_id')!=scope_manifest['retained_scope_id']):
+                raise ValueError('source run does not match retained scope')
+            reused=reuse_accepted_translations(c,args.reuse_from_run,run_id)
+            event('translation_reuse',run_id=run_id,**reused)
         work=Path('work/wadoku-xml/pilot-v6/translation')/str(run_id)
         run_limits=json.loads(c.execute('SELECT limits_json FROM run WHERE id=?',(run_id,)).fetchone()[0])
         make_batches(c,run_id,work/'inbox',{},run_limits.get('articles_per_batch',1),24000,100,16000,96000,150)

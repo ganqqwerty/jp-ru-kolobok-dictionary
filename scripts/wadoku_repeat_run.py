@@ -32,6 +32,9 @@ def main():
     parser.add_argument('--articles-per-batch', type=int, default=6)
     parser.add_argument('--classification-window-size', type=int, default=1000)
     parser.add_argument('--classification-context-budget', type=int, default=250000)
+    parser.add_argument('--reuse-from-scope')
+    parser.add_argument('--reuse-from-run', type=int)
+    parser.add_argument('--stop-after-classification', action='store_true')
     parser.add_argument('--event-log', type=Path)
     args = parser.parse_args()
     if not 1 <= args.concurrency <= 100:
@@ -79,6 +82,14 @@ def main():
                         and manifest.get('added_entry_count') == 10_000 and count == 30_000)
         if count != manifest.get('entry_count') or (count not in {100,200} and not prefix_scope and not linked_scope):
             raise ValueError('runner requires a supported pilot, prefix scope, or link-closed scope')
+        if args.reuse_from_scope or args.reuse_from_run:
+            if (manifest.get('version') != 'wadoku-linked-prefix-scope-v2'
+                    or args.reuse_from_scope != manifest.get('retained_scope_id')
+                    or args.reuse_from_run is None):
+                raise ValueError('both reuse sources must match the retained 20,000-entry scope')
+            stage('classification-reuse', ['scripts/wadoku_rich.py',
+                '--database-name','wadoku_rich_pilot','reuse-classification',
+                '--from-scope',args.reuse_from_scope,'--to-scope',args.scope_id])
         with db.connect() as c:
             initial_missing = c.execute('SELECT count(*) FROM wadoku_scope_entry WHERE scope_id=? AND decision_json IS NULL',
                                         (args.scope_id,)).fetchone()[0]
@@ -108,9 +119,13 @@ def main():
         event('classification_coverage', total=count, unresolved=missing)
         if missing:
             raise RuntimeError(f'{missing} entries still need classification; see classification logs')
+        if args.stop_after_classification:
+            event('pipeline_stopped_after_classification',scope_id=args.scope_id,total_articles=count)
+            return
         translation_log=stage('translation', ['scripts/wadoku_translate_window.py', '--scope-id', args.scope_id,
             '--candidate-scope', '--max-batches', str(min(5000, count)),
             '--concurrency', str(args.concurrency), '--articles-per-batch', str(args.articles_per_batch), '--context-budget', '192000',
+            *(['--reuse-from-run',str(args.reuse_from_run)] if args.reuse_from_run is not None else []),
             '--event-log', str(args.work_dir / 'translation.jsonl')])
         run_id = translation_run_id(translation_log)
         translation_window = 1
