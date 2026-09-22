@@ -42,6 +42,7 @@ from .yomitan_audit import (
 )
 from .yomitan_remediation import write_yomitan_update_index
 from .yomitan_plain import convert_yomitan_to_plain, verify_plain_yomitan
+from .yomitan_light import convert_yomitan_to_light, verify_light_yomitan
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -196,6 +197,12 @@ def _parser() -> argparse.ArgumentParser:
     plain_verify = commands.add_parser("verify-yomitan-plain")
     plain_verify.add_argument("path", type=Path)
     plain_verify.add_argument("--source", type=Path)
+    light_export = commands.add_parser("export-yomitan-light")
+    light_export.add_argument("path", type=Path)
+    light_export.add_argument("--output", type=Path, required=True)
+    light_verify = commands.add_parser("verify-yomitan-light")
+    light_verify.add_argument("path", type=Path)
+    light_verify.add_argument("--source", type=Path)
     return parser
 
 
@@ -387,6 +394,15 @@ def execute(args: argparse.Namespace) -> Any:
         result.update(validate_archive(
             args.path.resolve(), config.work_dir / "schemas" / "pinned-yomitan",
         ))
+        return result
+    if args.command == "export-yomitan-light":
+        result = convert_yomitan_to_light(args.path, args.output)
+        result.update(verify_light_yomitan(args.output, source=args.path))
+        result.update(validate_archive(args.output, Path("schemas/yomitan-77e200428902abf4fa48284df92da7af3dcb4162")))
+        return result
+    if args.command == "verify-yomitan-light":
+        result = verify_light_yomitan(args.path, source=args.source)
+        result.update(validate_archive(args.path, Path("schemas/yomitan-77e200428902abf4fa48284df92da7af3dcb4162")))
         return result
     config = Config.load(args.config)
     database = Database(config)

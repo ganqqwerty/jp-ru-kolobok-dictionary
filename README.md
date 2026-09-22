@@ -90,6 +90,25 @@ README-YTP-3 — Ruby becomes bracketed readings. Lists keep visible markers. Ta
 text columns and short form markers. External links show their URLs. Images become text
 placeholders, and the archive does not include CSS or media files.
 
+## README-YL — Light Yomitan export
+
+README-YL-1 — `export-yomitan-light` keeps all search terms, readings, redirects,
+word forms, and Russian definitions. It removes examples, external links,
+attribution from article display, form tables, images, and rich formatting.
+
+```sh
+translationctl export-yomitan-light \
+  dist/jp-ru-kolobok-400k-v1.0.1-yomitan.zip \
+  --output dist/jp-ru-kolobok-400k-v1.0.1-yomitan-light.zip
+translationctl verify-yomitan-light \
+  dist/jp-ru-kolobok-400k-v1.0.1-yomitan-light.zip \
+  --source dist/jp-ru-kolobok-400k-v1.0.1-yomitan.zip
+```
+
+README-YL-2 — The light archive has its own installed title. Its update channel is
+empty, so Yomitan cannot replace it with the full archive. License credit remains
+in dictionary metadata.
+
 ## README-GD — GoldenDict export
 
 README-GD-1 — `export-goldendict --run-id ID --output dist/jp-ru-kolobok-400k-v1.0-goldendict.zip`

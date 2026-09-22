@@ -98,7 +98,7 @@ def test_homepage_stages_v101_assets_without_obsolete_upgrade_warning() -> None:
     )
 
     assert "releases/tag/v1.0.1" in homepage
-    for format_name in ("yomitan", "goldendict", "mdict", "pocketbook", "apple-dictionary"):
+    for format_name in ("yomitan", "yomitan-light", "goldendict", "mdict", "pocketbook", "apple-dictionary"):
         assert f"jp-ru-kolobok-400k-v1.0.1-{format_name}.zip" in homepage
     assert "Важно для пользователей Yomitan v1.0" not in homepage
     assert "releases/download/run59-tags-ru-v1" not in homepage
