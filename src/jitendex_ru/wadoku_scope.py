@@ -245,7 +245,41 @@ def link_closed_prefix_ids(
     return selected, filler_seeds, seed_size
 
 
-def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int) -> dict[str, Any]:
+def link_closed_extension_ids(
+    order: list[int], references: dict[int, set[int]], *, retained: set[int], size: int,
+) -> tuple[set[int], set[int]]:
+    """Extend an existing closed scope without dropping or reselecting its entries."""
+    if not retained or not retained <= set(order) or not len(retained) < size <= len(order):
+        raise ValueError('invalid retained scope or extension size')
+    known = set(order)
+    if any((references.get(entry_id, set()) & known) - retained for entry_id in retained):
+        raise ValueError('retained scope is not link closed')
+    selected = set(retained)
+    seeds: set[int] = set()
+    for entry_id in order:
+        if len(selected) == size:
+            break
+        if entry_id in selected:
+            continue
+        closure = {entry_id}
+        pending = [entry_id]
+        while pending:
+            for target in references.get(pending.pop(), set()) & known:
+                if target not in selected and target not in closure:
+                    closure.add(target)
+                    pending.append(target)
+            if len(selected) + len(closure) > size:
+                break
+        if len(selected) + len(closure) <= size:
+            selected.update(closure)
+            seeds.add(entry_id)
+    if len(selected) != size:
+        raise ValueError(f'cannot extend link-closed scope exactly: {len(selected)}/{size}')
+    return selected, seeds
+
+
+def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int,
+                            retained_scope: Path | None = None) -> dict[str, Any]:
     """Freeze an exact-size prefix-oriented scope with transitive link closure."""
     if not 1 <= size <= EXPECTED_COUNTS['entries']:
         raise ValueError('linked scope size is outside the source inventory')
@@ -265,8 +299,21 @@ def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int) ->
         raw_references[entry_id] = refs
     if len(order) != EXPECTED_COUNTS['entries']:
         raise ValueError('full XML entry count differs')
-    selected, filler_seeds, seed_size = link_closed_prefix_ids(order, references, size=size)
-    seed_ids = set(order[:seed_size])
+    retained = json.loads(retained_scope.read_text()) if retained_scope else None
+    retained_ids = {entry['entry_id'] for entry in retained['entries']} if retained else set()
+    if retained:
+        old_manifest = retained['manifest']
+        if (old_manifest.get('version') not in {'wadoku-linked-prefix-scope-v1', 'wadoku-linked-prefix-scope-v2'}
+                or old_manifest['xml_sha256'] != expected_sha256
+                or len(retained_ids) != old_manifest['entry_count']):
+            raise ValueError('retained scope is incompatible or incomplete')
+        selected, filler_seeds = link_closed_extension_ids(
+            order, references, retained=retained_ids, size=size)
+        seed_size = old_manifest['prefix_size']
+        seed_ids = set(order[:seed_size])
+    else:
+        selected, filler_seeds, seed_size = link_closed_prefix_ids(order, references, size=size)
+        seed_ids = set(order[:seed_size])
     known = set(order)
     dangling = sorted({target for entry_id in selected for target in references[entry_id] if target not in known})
     dependencies = [
@@ -282,7 +329,9 @@ def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int) ->
     for ordinal, value in iter_canonical_entries(source):
         entry_id = int(value['entry_id'])
         if entry_id in selected:
-            if entry_id in seed_ids:
+            if entry_id in retained_ids:
+                categories = ['retained-source-entry']
+            elif entry_id in seed_ids:
                 categories = ['source-prefix']
             elif entry_id in filler_seeds:
                 categories = ['closure-filler']
@@ -295,7 +344,8 @@ def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int) ->
                              'reading': summaries[target]['reading']}
                for entry_id in selected for target in references[entry_id] if target in selected}
     manifest = {
-        'version': 'wadoku-linked-prefix-scope-v1', 'xml_sha256': expected_sha256,
+        'version': 'wadoku-linked-prefix-scope-v2' if retained else 'wadoku-linked-prefix-scope-v1',
+        'xml_sha256': expected_sha256,
         'entry_count': len(entries), 'source_entry_count': len(order),
         'candidate_count': len(candidates),
         'category_counts': dict(Counter(c for row in entries for c in row['categories'])),
@@ -303,6 +353,15 @@ def linked_prefix_inventory(source: Path, *, expected_sha256: str, size: int) ->
         'dangling_source_target_ids': dangling, 'prefix_size': seed_size,
         'requested_size': size, 'selection_rule': 'largest-prefix-transitive-reference-closure-v1',
     }
+    if retained:
+        manifest.update(retained_scope_id=retained['manifest']['scope_id'],
+                        retained_entry_count=len(retained_ids),
+                        added_entry_count=size-len(retained_ids),
+                        selection_rule='retained-link-closed-source-extension-v1')
+        old_hashes = {entry['entry_id']: entry['source_sha256'] for entry in retained['entries']}
+        if any(entry['source_sha256'] != old_hashes[entry['entry_id']]
+               for entry in entries if entry['entry_id'] in retained_ids):
+            raise ValueError('retained source entry changed')
     manifest['scope_id'] = sha256_bytes(canonical_json(
         [manifest, [(entry['entry_id'], entry['source_sha256']) for entry in entries]]))
     if len(entries) != size or len(selected) != size:

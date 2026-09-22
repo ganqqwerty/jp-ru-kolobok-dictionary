@@ -73,6 +73,10 @@ def main():
         prefix_scope = manifest.get('version') == 'wadoku-prefix-scope-v1' and manifest.get('prefix_size') == count
         linked_scope = (manifest.get('version') == 'wadoku-linked-prefix-scope-v1'
                         and manifest.get('requested_size') == count and 1 <= count <= 20_000)
+        linked_scope = linked_scope or (manifest.get('version') == 'wadoku-linked-prefix-scope-v2'
+                        and manifest.get('requested_size') == count
+                        and manifest.get('retained_entry_count') == 20_000
+                        and manifest.get('added_entry_count') == 10_000 and count == 30_000)
         if count != manifest.get('entry_count') or (count not in {100,200} and not prefix_scope and not linked_scope):
             raise ValueError('runner requires a supported pilot, prefix scope, or link-closed scope')
         with db.connect() as c:

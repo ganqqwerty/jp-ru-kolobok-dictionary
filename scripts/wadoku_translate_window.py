@@ -20,6 +20,7 @@ from jitendex_ru.wadoku_windows import begin_window, window_batches, finish_wind
 from jitendex_ru.wadoku_retry import retry_prompt, save_runtime_prompt
 from jitendex_ru.wadoku_telemetry import event, logged_dispatch, run_logged
 from jitendex_ru.wadoku_profile import DEFAULT_PROFILE, load_profile, resolve_prompt
+from jitendex_ru.wadoku_wire import translation_wire
 from run_codex_batches import dispatch_one, build_output_schema
 
 
@@ -61,7 +62,8 @@ def dispatch_batch(config,run_id,batch,work,prompt,context_budget,database=None)
         request_path=Path(batch['manifest_path'])
         request=json.loads(request_path.read_text())
         schema=build_output_schema(request,'translation')
-        supplied=request_path.stat().st_size+len(prompt.encode())+len(canonical_json(schema))+32768
+        wire, wire_format = translation_wire(request, base_prompt)
+        supplied=len(wire)+len(prompt.encode())+len(canonical_json(schema))+32768
         if supplied+12000>context_budget:
             recovery = split_ready_batch(
                 c, batch['id'],
@@ -78,12 +80,20 @@ def dispatch_batch(config,run_id,batch,work,prompt,context_budget,database=None)
         if item is None:
             return
         save_runtime_prompt(c, item, prompt, base_prompt, schema=schema)
+        wire_path = Path(item['response_path']).with_suffix('.wire.json')
+        atomic_write(wire_path, wire)
+        wire_details = {'wire_format': wire_format, 'path': str(wire_path),
+                        'sha256': sha256_bytes(wire), 'wire_bytes': len(wire),
+                        'canonical_bytes': len(canonical_json(request))}
+        audit(c, 'wadoku_worker_transport', 'attempt', item['attempt_id'], wire_details)
         c.commit()
         event('attempt_queued', run_id=run_id, batch_id=batch['id'], attempt_id=item['attempt_id'],
-              entry_ids=[a['sequence'] for a in request['articles']], input_reservation=supplied)
+              entry_ids=[a['sequence'] for a in request['articles']], input_reservation=supplied,
+              worker_transport=wire_details)
         c.close()
         c=None  # Never occupy a database connection while waiting for Luna.
-        result=logged_dispatch(dispatch_one,item,prompt,'translation',request_timeout_seconds=240,output_schema=schema)
+        result=logged_dispatch(dispatch_one,item,prompt,'translation',request_timeout_seconds=240,
+                               output_schema=schema,model_request_text=wire.decode())
         atomic_write(Path(item['response_path']).with_suffix('.events.jsonl'),result.stdout.encode())
         atomic_write(Path(item['response_path']).with_suffix('.stderr.txt'),result.stderr.encode())
         c=db.connect()
@@ -260,6 +270,11 @@ def main():
                 linked_scope = (scope_manifest.get('version') == 'wadoku-linked-prefix-scope-v1'
                                 and scope_manifest.get('requested_size') == len(scoped)
                                 and 1 <= len(scoped) <= 20_000)
+                linked_scope = linked_scope or (scope_manifest.get('version') == 'wadoku-linked-prefix-scope-v2'
+                                and scope_manifest.get('requested_size') == len(scoped)
+                                and scope_manifest.get('retained_entry_count') == 20_000
+                                and scope_manifest.get('added_entry_count') == 10_000
+                                and len(scoped) == 30_000)
                 if not prefix_scope and not linked_scope and not (focused and len(scoped) == 100) and not 150 <= len(scoped) <= 200:
                     raise ValueError('candidate scope size or manifest is unsupported')
                 if candidate_subset:

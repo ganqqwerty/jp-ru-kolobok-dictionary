@@ -275,10 +275,11 @@ def dispatch_one(
     executable: Path = CODEX,
     request_timeout_seconds: float | None = None,
     output_schema: dict[str, Any] | None = None,
+    model_request_text: str | None = None,
 ) -> DispatchResult:
     manifest_text = Path(item["request_path"]).read_text(encoding="utf-8")
     manifest = json.loads(manifest_text)
-    model_input = f"{prompt.rstrip()}\n\nSUPPLIED BATCH\n{manifest_text}"
+    model_input = f"{prompt.rstrip()}\n\nSUPPLIED BATCH\n{manifest_text if model_request_text is None else model_request_text}"
     schema_file = tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", suffix=".json", prefix="jitendex-schema-",
         dir="/private/tmp", delete=False,

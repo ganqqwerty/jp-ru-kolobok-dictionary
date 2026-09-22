@@ -15,11 +15,15 @@ def main():
     parser.add_argument('--size', type=int, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--link-closed', action='store_true')
+    parser.add_argument('--extend-from', type=Path)
     args = parser.parse_args()
     config = load_profile(Path('config.wadoku.rich.luna.toml'))
     source = Path('work/wadoku-xml/source/wadoku-xml-20260705/wadoku.xml')
     builder = linked_prefix_inventory if args.link_closed else prefix_inventory
-    data = builder(source, expected_sha256=config.raw['source']['xml_sha256'], size=args.size)
+    if args.extend_from and not args.link_closed:
+        raise ValueError('--extend-from requires --link-closed')
+    data = builder(source, expected_sha256=config.raw['source']['xml_sha256'], size=args.size,
+                   **({'retained_scope': args.extend_from} if args.extend_from else {}))
     db = Database(config)
     c = db.connect()
     try:

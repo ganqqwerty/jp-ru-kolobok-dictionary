@@ -270,11 +270,14 @@ def test_dispatch_does_not_start_a_child_after_stop(tmp_path):
     assert not MODULE.CHILDREN
 
 
-def test_dispatch_reports_worker_process_launch_time(tmp_path, monkeypatch):
+@pytest.mark.parametrize('wire_text', [None, '{"wire_format":"test","manifest":{}}'])
+def test_dispatch_reports_worker_process_launch_time(tmp_path, monkeypatch, wire_text):
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
         '{"batch_id":"b1","manifest_sha256":"m","articles":[]}', encoding="utf-8",
     )
+
+    inputs = []
 
     class Process:
         pid = 123
@@ -282,6 +285,7 @@ def test_dispatch_reports_worker_process_launch_time(tmp_path, monkeypatch):
 
         @staticmethod
         def communicate(_input):
+            inputs.append(_input)
             return "", ""
 
         @staticmethod
@@ -294,10 +298,13 @@ def test_dispatch_reports_worker_process_launch_time(tmp_path, monkeypatch):
         "attempt_id": "a1", "batch_id": "b1", "request_path": str(manifest_path),
         "response_path": str(tmp_path / "response.json"), "model_id": "m",
         "reasoning_effort": "medium",
-    }, "prompt", "translation", launches.append)
+    }, "prompt", "translation", launches.append, model_request_text=wire_text)
     assert result.returncode == 0
     assert len(launches) == 1
     assert isinstance(launches[0], float)
+    assert inputs == ['prompt\n\nSUPPLIED BATCH\n' + (
+        manifest_path.read_text() if wire_text is None else wire_text)]
+    assert result.claim['request_path'] == str(manifest_path)
 
 
 def test_dispatch_terminates_and_reports_a_timed_out_child(tmp_path, monkeypatch):
