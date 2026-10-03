@@ -5,13 +5,16 @@ fetch("data.json").then(response => response.json()).then(data => {
   const pageSize = 30;
   let page = 0;
   const pilotLinks = new Map();
+  const pilotTerms = new Map();
   for (const article of data.articles) {
     for (const alias of article.aliases) {
-      for (const key of [alias.term, alias.reading]) {
-        const ids = pilotLinks.get(key) || new Set();
-        ids.add(article.id);
-        pilotLinks.set(key, ids);
-      }
+      const key = `${alias.term}\u0000${alias.reading}`;
+      const ids = pilotLinks.get(key) || new Set();
+      ids.add(article.id);
+      pilotLinks.set(key, ids);
+      const termIds = pilotTerms.get(alias.term) || new Set();
+      termIds.add(article.id);
+      pilotTerms.set(alias.term, termIds);
     }
   }
 
@@ -35,15 +38,20 @@ fetch("data.json").then(response => response.json()).then(data => {
     if (node.tag === "a") {
       const sourceHref = typeof node.href === "string" ? node.href : "/";
       const resolved = new URL(sourceHref, "https://www.wadoku.de/");
-      const query = resolved.searchParams.get("query");
-      const matches = query && pilotLinks.get(query);
-      element.href = matches?.size === 1 ? `#wadoku-${[...matches][0]}` :
-        resolved.origin === "https://www.wadoku.de" ? resolved.href : "https://www.wadoku.de/";
+      element.href = resolved.origin === "https://www.wadoku.de" ? resolved.href : "https://www.wadoku.de/";
       element.rel = "noopener";
     }
     if (typeof node.data?.wadokuTerm === "string") element.dataset.wadokuTerm = node.data.wadokuTerm;
     if (node.lang === "ja") element.lang = "ja";
     if (node.content !== undefined) element.append(render(node.content));
+    if (["wadoku-ref", "wadoku-child-item"].includes(node.data?.content)) {
+      const link = element.querySelector("a");
+      const reading = link?.nextSibling?.textContent?.match(/^【([^】]+)】/)?.[1];
+      const matches = reading
+        ? pilotLinks.get(`${link.textContent}\u0000${reading}`)
+        : pilotTerms.get(link?.textContent);
+      if (matches?.size === 1) link.href = `#wadoku-${[...matches][0]}`;
+    }
     return element;
   }
 
@@ -110,6 +118,7 @@ fetch("data.json").then(response => response.json()).then(data => {
     if (!id) return;
     const index = data.articles.findIndex(article => String(article.id) === id);
     if (index < 0) return;
+    search.value = "";
     page = Math.floor(index / pageSize);
     show();
     document.getElementById(`wadoku-${id}`)?.scrollIntoView();
